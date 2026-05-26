@@ -43,6 +43,19 @@ func main() {
 		go ws.renderer.Apply(ws.state)
 	}
 
+	// Watchdog: re-apply when a screen process dies unexpectedly.
+	go func() {
+		for range ws.renderer.applyTrigger {
+			ws.renderer.mu.Lock()
+			state := ws.renderer.lastState
+			ws.renderer.mu.Unlock()
+			if state != nil {
+				log.Printf("[renderer] watchdog: screen died, re-applying state")
+				ws.renderer.Apply(state)
+			}
+		}
+	}()
+
 	w := newWatcher(cfg, ws)
 	if err := w.Start(); err != nil {
 		log.Fatalf("watcher start failed: %v", err)

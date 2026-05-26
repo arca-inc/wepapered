@@ -45,10 +45,18 @@ type Renderer struct {
 	screens      map[string]*screenProc // keyed by Wayland output name
 	cfg          *Config
 	loadingProcs []*exec.Cmd // hyprpaper processes used for loading placeholders
+	lastState    *DaemonState
+	applyTrigger chan struct{} // closed/replaced to trigger a re-apply
+	crashCounts  map[string]int // consecutive rapid-crash count per output
 }
 
 func newRenderer(cfg *Config) *Renderer {
-	return &Renderer{cfg: cfg, screens: make(map[string]*screenProc)}
+	return &Renderer{
+		cfg:          cfg,
+		screens:      make(map[string]*screenProc),
+		applyTrigger: make(chan struct{}, 1),
+		crashCounts:  make(map[string]int),
+	}
 }
 
 const loadingPNGPath = "/tmp/wepapered-loading.png"
@@ -225,6 +233,7 @@ func (r *Renderer) stopLoadingBgLocked() {
 
 func (r *Renderer) Apply(state *DaemonState) {
 	r.mu.Lock()
+	r.lastState = state
 	defer r.mu.Unlock()
 
 	if len(state.Monitors) == 0 {
@@ -435,6 +444,9 @@ func (r *Renderer) Apply(state *DaemonState) {
 // Sets up a ready-pipe (fd 3 in subprocess) and a ctrl socket path.
 // Must be called with r.mu held.
 func (r *Renderer) launchScreenLocked(outputName, bgDir, assetsDir string) *screenProc {
+	// Reset crash counter — explicit (re)launch starts a fresh slate.
+	r.crashCounts[outputName] = 0
+
 	// Create pipe: parent reads, subprocess writes "READY\n" when rendering starts.
 	readR, readW, pipeErr := os.Pipe()
 	if pipeErr != nil {
@@ -495,18 +507,7 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, assetsDir string) *scre
 	}
 
 	doneCh := make(chan struct{})
-	go func() {
-		defer close(doneCh)
-		if err := cmd.Wait(); err != nil {
-			log.Printf("[renderer] lwe %s (pid=%d) exited: %v", outputName, cmd.Process.Pid, err)
-		} else {
-			log.Printf("[renderer] lwe %s (pid=%d) exited", outputName, cmd.Process.Pid)
-		}
-	}()
-
-	log.Printf("[renderer] started lwe pid=%d for %s", cmd.Process.Pid, outputName)
-
-	return &screenProc{
+	sp := &screenProc{
 		cmd:      cmd,
 		doneCh:   doneCh,
 		output:   outputName,
@@ -514,6 +515,46 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, assetsDir string) *scre
 		ctrlSock: ctrlSockPath,
 		readyCh:  readyCh,
 	}
+	startTime := time.Now()
+	go func() {
+		defer close(doneCh)
+		if err := cmd.Wait(); err != nil {
+			log.Printf("[renderer] lwe %s (pid=%d) exited: %v", outputName, cmd.Process.Pid, err)
+		} else {
+			log.Printf("[renderer] lwe %s (pid=%d) exited", outputName, cmd.Process.Pid)
+		}
+		// Watchdog: if this process is still the registered screen, remove it and
+		// schedule a re-apply with backoff.
+		r.mu.Lock()
+		if r.screens[outputName] != sp {
+			r.mu.Unlock()
+			return
+		}
+		delete(r.screens, outputName)
+		uptime := time.Since(startTime)
+		if uptime > 30*time.Second {
+			r.crashCounts[outputName] = 0
+		}
+		r.crashCounts[outputName]++
+		count := r.crashCounts[outputName]
+		r.mu.Unlock()
+
+		const maxCrashes = 5
+		if count > maxCrashes {
+			log.Printf("[renderer] %s: crashed %d times rapidly, giving up restart", outputName, count)
+			return
+		}
+		delay := time.Duration(count) * 2 * time.Second
+		log.Printf("[renderer] %s: crash #%d — retrying in %v", outputName, count, delay)
+		time.Sleep(delay)
+		select {
+		case r.applyTrigger <- struct{}{}:
+		default:
+		}
+	}()
+
+	log.Printf("[renderer] started lwe pid=%d for %s", cmd.Process.Pid, outputName)
+	return sp
 }
 
 // Stop kills all running renderers and loading placeholders.
@@ -617,7 +658,7 @@ func errorWallpaperDir(label, title, typ string) string {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return ""
 	}
-	proj := `{"type":"web","title":"Error"}`
+	proj := `{"type":"web","title":"Error","file":"index.html"}`
 	if err := os.WriteFile(filepath.Join(dir, "project.json"), []byte(proj), 0644); err != nil {
 		return ""
 	}
