@@ -1,0 +1,4 @@
+[submodule "lwe"]
+	path = lwe
+	url = https://github.com/arca-inc/lwe-patched
+	branch = wepapered
