@@ -27,8 +27,8 @@ var lweOutputDir = func() string {
 			return dir
 		}
 	}
-	// Development default: submodule build output.
-	return "/home/warmadon/wepapered/lwe/build/output"
+	// Development default: submodule build output relative to HOME.
+	return filepath.Join(os.Getenv("HOME"), "wepapered/lwe/build/output")
 }()
 
 var lwebin = filepath.Join(lweOutputDir, "linux-wallpaperengine")

@@ -233,8 +233,9 @@ func (s *WSServer) Broadcast(v interface{}) {
 func notifyUser(body string) {
 	var cmd *exec.Cmd
 	if os.Getuid() == 0 {
-		cmd = exec.Command("sudo", "-u", "warmadon",
-			"env", "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+		dbusAddr := fmt.Sprintf("unix:path=/run/user/%d/bus", sessionUID())
+		cmd = exec.Command("sudo", "-u", sessionUsername(),
+			"env", "DBUS_SESSION_BUS_ADDRESS="+dbusAddr,
 			"notify-send", "-a", "wepapered", "Wallpaper Engine", body)
 	} else {
 		cmd = exec.Command("notify-send", "-a", "wepapered", "Wallpaper Engine", body)

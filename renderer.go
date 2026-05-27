@@ -21,7 +21,7 @@ import (
 
 func init() {
 	if os.Getuid() == 0 {
-		log.Print("[renderer] WARNING: running as root — embedded LWE cannot connect to Wayland. Run wepapered as warmadon.")
+		log.Printf("[renderer] WARNING: running as root — embedded LWE cannot connect to Wayland. Run wepapered as %s.", sessionUsername())
 	}
 	lweSetSubprocessPath(lwesubprocessbin)
 }
@@ -104,7 +104,7 @@ func waylandEnvOverrides(extra map[string]string) []string {
 		overrides["WAYLAND_DISPLAY"] = "wayland-1"
 	}
 	if os.Getenv("XDG_RUNTIME_DIR") == "" {
-		overrides["XDG_RUNTIME_DIR"] = "/run/user/1000"
+		overrides["XDG_RUNTIME_DIR"] = fmt.Sprintf("/run/user/%d", sessionUID())
 	}
 	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") == "" {
 		if sig := hyprlandInstanceSig(); sig != "" {
@@ -130,9 +130,22 @@ func waylandEnvOverrides(extra map[string]string) []string {
 }
 
 func lweSubprocEnv() []string {
-	return waylandEnvOverrides(map[string]string{
+	extras := map[string]string{
 		"LWE_CEF_SUBPROCESS_PATH": lwesubprocessbin,
-	})
+		"VK_ICD_FILENAMES":        filepath.Join(lweOutputDir, "vk_swiftshader_icd.json"),
+	}
+	icuShim := filepath.Join(lweOutputDir, "liblwe_cef_icu_fix.so")
+	if _, err := os.Stat(icuShim); err == nil {
+		extras["LD_PRELOAD"] = icuShim
+	}
+	// Ensure the output dir is in LD_LIBRARY_PATH so CEF subprocesses can find
+	// bundled libraries (libvk_swiftshader.so etc.) regardless of cwd.
+	if existing := os.Getenv("LD_LIBRARY_PATH"); existing != "" {
+		extras["LD_LIBRARY_PATH"] = lweOutputDir + ":" + existing
+	} else {
+		extras["LD_LIBRARY_PATH"] = lweOutputDir
+	}
+	return waylandEnvOverrides(extras)
 }
 
 // ── hyprctl helpers ───────────────────────────────────────────────────────────
@@ -146,7 +159,7 @@ func hyprctlOutput(args ...string) ([]byte, error) {
 		sigs = append(sigs, sig)
 		seen[sig] = true
 	}
-	if entries, err := os.ReadDir("/run/user/1000/hypr"); err == nil {
+	if entries, err := os.ReadDir(hyprDir()); err == nil {
 		for _, e := range entries {
 			if e.IsDir() && !seen[e.Name()] {
 				sigs = append(sigs, e.Name())
@@ -618,13 +631,13 @@ func hyprlandOutputs() ([]hyprOutput, error) {
 	if os.Getuid() == 0 {
 		sig := hyprlandInstanceSig()
 		waylandEnv := []string{
-			"HOME=/home/warmadon",
+			"HOME=" + sessionHome(),
 			"WAYLAND_DISPLAY=wayland-1",
-			"XDG_RUNTIME_DIR=/run/user/1000",
+			fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%d", sessionUID()),
 			"XDG_SESSION_TYPE=wayland",
 			"HYPRLAND_INSTANCE_SIGNATURE=" + sig,
 		}
-		cmd := exec.Command("sudo", append([]string{"-u", "warmadon", "env"}, append(waylandEnv, "hyprctl", "monitors", "-j")...)...)
+		cmd := exec.Command("sudo", append([]string{"-u", sessionUsername(), "env"}, append(waylandEnv, "hyprctl", "monitors", "-j")...)...)
 		out, err = cmd.Output()
 	} else {
 		out, err = hyprctlOutput("monitors", "-j")
@@ -688,11 +701,63 @@ func isLWESupportedType(t string) bool {
 }
 
 func hyprlandInstanceSig() string {
-	entries, _ := os.ReadDir("/run/user/1000/hypr")
+	entries, _ := os.ReadDir(hyprDir())
 	for _, e := range entries {
 		if e.IsDir() {
 			return e.Name()
 		}
 	}
 	return ""
+}
+
+// ── Session user helpers ───────────────────────────────────────────────────────
+
+// sessionUID returns the UID of the Wayland session owner.
+// When wepapered runs as root (e.g. via sudo), SUDO_UID gives the real user.
+func sessionUID() int {
+	if os.Getuid() == 0 {
+		if s := os.Getenv("SUDO_UID"); s != "" {
+			var uid int
+			fmt.Sscan(s, &uid)
+			if uid > 0 {
+				return uid
+			}
+		}
+	}
+	return os.Getuid()
+}
+
+// sessionUsername returns the login name of the Wayland session owner.
+func sessionUsername() string {
+	if os.Getuid() == 0 {
+		if u := os.Getenv("SUDO_USER"); u != "" {
+			return u
+		}
+	}
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return "root"
+}
+
+// sessionHome returns the home directory of the Wayland session owner.
+func sessionHome() string {
+	if os.Getuid() == 0 {
+		if u := os.Getenv("SUDO_USER"); u != "" {
+			return "/home/" + u
+		}
+	}
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	return "/root"
+}
+
+// hyprDir returns the path to the Hyprland socket directory for the session.
+func hyprDir() string {
+	xdg := os.Getenv("XDG_RUNTIME_DIR")
+	if xdg == "" {
+		xdg = fmt.Sprintf("/run/user/%d", sessionUID())
+	}
+	return filepath.Join(xdg, "hypr")
 }
