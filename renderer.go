@@ -132,7 +132,6 @@ func waylandEnvOverrides(extra map[string]string) []string {
 func lweSubprocEnv() []string {
 	extras := map[string]string{
 		"LWE_CEF_SUBPROCESS_PATH": lwesubprocessbin,
-		"VK_ICD_FILENAMES":        filepath.Join(lweOutputDir, "vk_swiftshader_icd.json"),
 	}
 	icuShim := filepath.Join(lweOutputDir, "liblwe_cef_icu_fix.so")
 	if _, err := os.Stat(icuShim); err == nil {
