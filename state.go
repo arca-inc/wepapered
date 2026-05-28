@@ -4,20 +4,23 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
 // MonitorWallpaper tracks the active wallpaper per monitor.
 type MonitorWallpaper struct {
-	Monitor     string `json:"monitor"`
-	WinPath     string `json:"win_path"`
-	LinuxPath   string `json:"linux_path"`
-	WorkshopID  string `json:"workshop_id"`
-	Title       string `json:"title"`
-	Type        string `json:"type"`
-	PreviewFile string `json:"preview_file"`
-	DevicePath  string `json:"device_path"` // Windows device path e.g. //?/DISPLAY#Default_Monitor#0000…
-	RenderDir   string `json:"render_dir,omitempty"` // overrides LinuxPath for rendering (e.g. dependency dir)
+	Monitor     string            `json:"monitor"`
+	WinPath     string            `json:"win_path"`
+	LinuxPath   string            `json:"linux_path"`
+	WorkshopID  string            `json:"workshop_id"`
+	Title       string            `json:"title"`
+	Type        string            `json:"type"`
+	PreviewFile string            `json:"preview_file"`
+	DevicePath  string            `json:"device_path"` // Windows device path e.g. //?/DISPLAY#Default_Monitor#0000…
+	RenderDir   string            `json:"render_dir,omitempty"`   // dependency dir (HTML/JS from framework)
+	PresetDir   string            `json:"preset_dir,omitempty"`   // preset dir (assets like directories/, files/)
+	Props       map[string]string `json:"props,omitempty"`        // preset property overrides
 }
 
 type DaemonState struct {
@@ -95,11 +98,12 @@ func winToLinux(winPath, wePath string) string {
 }
 
 type ProjectJSON struct {
-	Title      string `json:"title"`
-	Type       string `json:"type"`
-	File       string `json:"file"`
-	Preview    string `json:"preview"`
-	Dependency string `json:"dependency"` // workshop ID of the framework this wallpaper depends on
+	Title      string                 `json:"title"`
+	Type       string                 `json:"type"`
+	File       string                 `json:"file"`
+	Preview    string                 `json:"preview"`
+	Dependency string                 `json:"dependency"` // workshop ID of the framework this wallpaper depends on
+	Preset     map[string]interface{} `json:"preset"`     // user property overrides for dependency wallpapers
 }
 
 func readProjectMeta(linuxPath string) *ProjectJSON {
@@ -137,6 +141,35 @@ func inferTypeFromDir(dir string) string {
 		}
 	}
 	return ""
+}
+
+// presetToStringMap converts a mixed-type preset map to string key=value pairs
+// suitable for --set-property. Skips nulls and complex types (objects, arrays).
+func presetToStringMap(preset map[string]interface{}) map[string]string {
+	if len(preset) == 0 {
+		return nil
+	}
+	result := make(map[string]string, len(preset))
+	for k, v := range preset {
+		switch val := v.(type) {
+		case nil:
+			// skip
+		case bool:
+			if val {
+				result[k] = "1"
+			} else {
+				result[k] = "0"
+			}
+		case float64:
+			result[k] = strconv.FormatFloat(val, 'f', -1, 64)
+		case string:
+			if val != "" {
+				result[k] = val
+			}
+		// skip arrays and objects — too complex for --set-property
+		}
+	}
+	return result
 }
 
 func isDir(p string) bool {

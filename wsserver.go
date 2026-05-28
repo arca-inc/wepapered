@@ -162,6 +162,8 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 
 	// If type is still unknown, try the dependency workshop item.
 	renderDir := ""
+	presetDir := ""
+	var props map[string]string
 	if meta != nil && meta.Type == "" && meta.Dependency != "" {
 		dir := linuxPath
 		if !isDir(dir) {
@@ -171,6 +173,8 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		if depMeta := readProjectMeta(filepath.Join(depDir, "project.json")); depMeta != nil && depMeta.Type != "" {
 			meta.Type = depMeta.Type
 			renderDir = depDir
+			presetDir = dir // the original wallpaper dir holds assets (directories/, files/)
+			props = presetToStringMap(meta.Preset)
 			log.Printf("[wepapered] inferred type %q from dependency %s", meta.Type, meta.Dependency)
 		}
 	}
@@ -193,6 +197,8 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		WorkshopID: workshopID,
 		DevicePath: devicePath,
 		RenderDir:  renderDir,
+		PresetDir:  presetDir,
+		Props:      props,
 	}
 	if meta != nil {
 		mw.Title = meta.Title

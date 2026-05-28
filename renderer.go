@@ -63,19 +63,34 @@ const loadingPNGPath = "/tmp/wepapered-loading.png"
 
 // ── IPC helpers ───────────────────────────────────────────────────────────────
 
-// sendCtrlLoad sends "load:<bgDir>" to the LWE control socket and blocks until
-// LWE responds with "READY" (new wallpaper is starting to render).
-func sendCtrlLoad(sockPath, bgDir string) error {
+// sendCtrlLoadJSON sends a JSON load command to the LWE control socket and blocks
+// until LWE responds with "READY".
+func sendCtrlLoadJSON(sockPath, bgDir, presetDir string, props map[string]string) error {
+	payload := map[string]interface{}{
+		"cmd": "load",
+		"bg":  bgDir,
+	}
+	if presetDir != "" {
+		payload["preset_dir"] = presetDir
+	}
+	if len(props) > 0 {
+		payload["props"] = props
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
 	conn, err := net.DialTimeout("unix", sockPath, 3*time.Second)
 	if err != nil {
 		return fmt.Errorf("dial %s: %w", sockPath, err)
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(30 * time.Second))
-	if _, err := fmt.Fprintf(conn, "load:%s\n", bgDir); err != nil {
+	if _, err := conn.Write(append(data, '\n')); err != nil {
 		return err
 	}
-	buf := make([]byte, 16)
+	buf := make([]byte, 64)
 	n, err := conn.Read(buf)
 	if err != nil {
 		return err
@@ -84,6 +99,11 @@ func sendCtrlLoad(sockPath, bgDir string) error {
 		return fmt.Errorf("unexpected response: %q", string(buf[:n]))
 	}
 	return nil
+}
+
+// sendCtrlLoad is the legacy plain-text protocol (kept for compatibility).
+func sendCtrlLoad(sockPath, bgDir string) error {
+	return sendCtrlLoadJSON(sockPath, bgDir, "", nil)
 }
 
 func sendCtrlStop(sockPath string) {
@@ -203,17 +223,48 @@ func ensureLoadingPNG() error {
 	return png.Encode(f, img)
 }
 
+type loadingOutputEntry struct {
+	output      hyprOutput
+	previewPath string
+}
+
 func (r *Renderer) startLoadingBgLocked(outputs []hyprOutput) {
+	entries := make([]loadingOutputEntry, len(outputs))
+	for i, o := range outputs {
+		entries[i] = loadingOutputEntry{o, ""}
+	}
+	r.startLoadingBgWithPreviewLocked(entries)
+}
+
+func (r *Renderer) startLoadingBgWithPreviewLocked(entries []loadingOutputEntry) {
 	if err := ensureLoadingPNG(); err != nil {
 		log.Printf("[renderer] loading PNG: %v", err)
 		return
 	}
+
 	var cfg strings.Builder
 	cfg.WriteString("splash = false\n")
 	cfg.WriteString("preload = " + loadingPNGPath + "\n")
-	for _, o := range outputs {
-		cfg.WriteString("wallpaper = " + o.Name + "," + loadingPNGPath + "\n")
+
+	// Preload any preview images that exist on disk
+	preloaded := map[string]bool{loadingPNGPath: true}
+	for _, e := range entries {
+		if e.previewPath != "" && !preloaded[e.previewPath] {
+			if _, err := os.Stat(e.previewPath); err == nil {
+				cfg.WriteString("preload = " + e.previewPath + "\n")
+				preloaded[e.previewPath] = true
+			}
+		}
 	}
+
+	for _, e := range entries {
+		img := loadingPNGPath
+		if e.previewPath != "" && preloaded[e.previewPath] {
+			img = e.previewPath
+		}
+		cfg.WriteString("wallpaper = " + e.output.Name + "," + img + "\n")
+	}
+
 	cfgPath := "/tmp/wepapered-hyprpaper.conf"
 	if err := os.WriteFile(cfgPath, []byte(cfg.String()), 0644); err != nil {
 		log.Printf("[renderer] hyprpaper config: %v", err)
@@ -227,7 +278,7 @@ func (r *Renderer) startLoadingBgLocked(outputs []hyprOutput) {
 		log.Printf("[renderer] hyprpaper start: %v", err)
 		return
 	}
-	log.Printf("[renderer] loading placeholder pid=%d on %d output(s)", cmd.Process.Pid, len(outputs))
+	log.Printf("[renderer] loading placeholder pid=%d on %d output(s)", cmd.Process.Pid, len(entries))
 	r.loadingProcs = append(r.loadingProcs, cmd)
 }
 
@@ -266,7 +317,13 @@ func (r *Renderer) Apply(state *DaemonState) {
 	assetsDir := filepath.Join(r.cfg.WEPath, "assets")
 
 	type wantEntry struct {
-		bgDir, label, title, typ string
+		bgDir     string
+		presetDir string
+		props     map[string]string
+		previewPath string
+		label     string
+		title     string
+		typ       string
 	}
 	desired := map[string]wantEntry{}
 	for label, mw := range state.Monitors {
@@ -296,13 +353,30 @@ func (r *Renderer) Apply(state *DaemonState) {
 				continue
 			}
 		}
-		desired[outName] = wantEntry{bgDir, label, mw.Title, mw.Type}
+
+		// Resolve preview image path for the loading state
+		previewPath := ""
+		if mw.PreviewFile != "" {
+			dir := mw.LinuxPath
+			if !isDir(dir) {
+				dir = filepath.Dir(dir)
+			}
+			candidate := filepath.Join(dir, mw.PreviewFile)
+			if _, err := os.Stat(candidate); err == nil {
+				previewPath = candidate
+			}
+		}
+
+		desired[outName] = wantEntry{bgDir, mw.PresetDir, mw.Props, previewPath, label, mw.Title, mw.Type}
 	}
 
 	type hwWork struct {
-		sp     *screenProc
-		newBg  string
-		output string
+		sp        *screenProc
+		newBg     string
+		presetDir string
+		props     map[string]string
+		previewPath string
+		output    string
 	}
 	var toStop []*screenProc
 	var toHotswap []hwWork
@@ -317,7 +391,7 @@ func (r *Renderer) Apply(state *DaemonState) {
 			}
 		} else if w.bgDir != sp.bgDir {
 			if sp.ctrlSock != "" && !sp.hotswapping {
-				toHotswap = append(toHotswap, hwWork{sp, w.bgDir, outName})
+				toHotswap = append(toHotswap, hwWork{sp, w.bgDir, w.presetDir, w.props, w.previewPath, outName})
 				sp.hotswapping = true
 			} else if !sp.hotswapping {
 				// No ctrl socket yet or process died: kill and restart.
@@ -344,13 +418,20 @@ func (r *Renderer) Apply(state *DaemonState) {
 		}
 	}
 
-	// Loading bg covers: new starts + hot-swapping screens
-	var loadingForOutputs []hyprOutput
-	loadingForOutputs = append(loadingForOutputs, startingOutputs...)
+	// Loading bg covers: new starts + hot-swapping screens.
+	// Use the incoming wallpaper's preview image when available.
+	var loadingEntries []loadingOutputEntry
+	for _, o := range startingOutputs {
+		preview := ""
+		if w, ok := desired[o.Name]; ok {
+			preview = w.previewPath
+		}
+		loadingEntries = append(loadingEntries, loadingOutputEntry{o, preview})
+	}
 	for _, hw := range toHotswap {
 		for _, o := range outputs {
 			if o.Name == hw.output {
-				loadingForOutputs = append(loadingForOutputs, o)
+				loadingEntries = append(loadingEntries, loadingOutputEntry{o, hw.previewPath})
 				break
 			}
 		}
@@ -360,9 +441,9 @@ func (r *Renderer) Apply(state *DaemonState) {
 		return
 	}
 
-	if len(loadingForOutputs) > 0 {
+	if len(loadingEntries) > 0 {
 		r.stopLoadingBgLocked()
-		r.startLoadingBgLocked(loadingForOutputs)
+		r.startLoadingBgWithPreviewLocked(loadingEntries)
 	}
 
 	// Wait for stopped screens to exit (release lock while waiting)
@@ -383,7 +464,7 @@ func (r *Renderer) Apply(state *DaemonState) {
 			continue
 		}
 		log.Printf("[renderer] %s → %s : %s (%s)", w.label, outName, w.title, w.typ)
-		sp := r.launchScreenLocked(outName, w.bgDir, assetsDir)
+		sp := r.launchScreenLocked(outName, w.bgDir, w.presetDir, w.props, assetsDir)
 		if sp != nil {
 			r.screens[outName] = sp
 			allReadyChs = append(allReadyChs, sp.readyCh)
@@ -396,13 +477,13 @@ func (r *Renderer) Apply(state *DaemonState) {
 		hwDoneCh := make(chan struct{})
 		allReadyChs = append(allReadyChs, hwDoneCh)
 
-		hwSp, hwNewBg, hwOut := hw.sp, hw.newBg, hw.output
+		hwSp, hwNewBg, hwPresetDir, hwProps, hwOut := hw.sp, hw.newBg, hw.presetDir, hw.props, hw.output
 
 		go func() {
 			defer close(hwDoneCh)
 			log.Printf("[renderer] hot-swap %s → %s", hwOut, hwNewBg)
 
-			if err := sendCtrlLoad(hwSp.ctrlSock, hwNewBg); err != nil {
+			if err := sendCtrlLoadJSON(hwSp.ctrlSock, hwNewBg, hwPresetDir, hwProps); err != nil {
 				log.Printf("[renderer] hot-swap %s failed (%v), falling back to restart", hwOut, err)
 				if hwSp.cmd.Process != nil {
 					hwSp.cmd.Process.Signal(syscall.SIGTERM)
@@ -412,7 +493,7 @@ func (r *Renderer) Apply(state *DaemonState) {
 				r.mu.Lock()
 				delete(r.screens, hwOut)
 				hwSp.hotswapping = false
-				newSp := r.launchScreenLocked(hwOut, hwNewBg, capturedAssetsDir)
+				newSp := r.launchScreenLocked(hwOut, hwNewBg, hwPresetDir, hwProps, capturedAssetsDir)
 				if newSp != nil {
 					r.screens[hwOut] = newSp
 				}
@@ -429,7 +510,7 @@ func (r *Renderer) Apply(state *DaemonState) {
 	}
 
 	// Hide loading bg when all screens are ready, or after timeout
-	if len(loadingForOutputs) > 0 {
+	if len(loadingEntries) > 0 {
 		chs := allReadyChs
 		go func() {
 			timer := time.NewTimer(8 * time.Second)
@@ -455,7 +536,7 @@ func (r *Renderer) Apply(state *DaemonState) {
 // launchScreenLocked starts an LWE subprocess for one output.
 // Sets up a ready-pipe (fd 3 in subprocess) and a ctrl socket path.
 // Must be called with r.mu held.
-func (r *Renderer) launchScreenLocked(outputName, bgDir, assetsDir string) *screenProc {
+func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props map[string]string, assetsDir string) *screenProc {
 	// Reset crash counter — explicit (re)launch starts a fresh slate.
 	r.crashCounts[outputName] = 0
 
@@ -480,6 +561,12 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, assetsDir string) *scre
 		"--screen-root", outputName,
 		"--bg", bgDir,
 	)
+	if presetDir != "" {
+		cmd.Args = append(cmd.Args, "--preset-dir", presetDir)
+	}
+	for k, v := range props {
+		cmd.Args = append(cmd.Args, "--set-property", k+"="+v)
+	}
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
