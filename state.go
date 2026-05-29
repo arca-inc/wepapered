@@ -87,12 +87,17 @@ func saveState(s *DaemonState) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// winToLinux converts a WE Windows path like "S:/workshop/content/431960/…"
-// to an absolute Linux path using the configured WE path.
+// winToLinux converts a WE Windows path to an absolute Linux path.
+//   S: drive = steamapps root (parent of "common/wallpaper_engine")
+//   Z: drive = Wine's mapping of the Linux root filesystem (Z:\home\... → /home/...)
 func winToLinux(winPath, wePath string) string {
-	// S: drive = steamapps root (parent of "common/wallpaper_engine")
-	steamapps := filepath.Dir(filepath.Dir(wePath)) // …/steamapps
 	p := strings.ReplaceAll(winPath, "\\", "/")
+	// Z: = Linux root (Wine maps / to Z:\)
+	if len(p) >= 3 && (p[0] == 'Z' || p[0] == 'z') && p[1] == ':' && p[2] == '/' {
+		return filepath.FromSlash("/" + p[3:])
+	}
+	// S: = steamapps root
+	steamapps := filepath.Dir(filepath.Dir(wePath)) // …/steamapps
 	p = strings.TrimPrefix(p, "S:/")
 	return filepath.Join(steamapps, filepath.FromSlash(p))
 }

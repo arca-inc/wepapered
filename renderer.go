@@ -32,6 +32,8 @@ type screenProc struct {
 	doneCh      chan struct{} // closed when subprocess exits
 	output      string
 	bgDir       string       // currently rendering wallpaper directory
+	presetDir   string       // preset/asset directory (may differ for same-framework web presets)
+	typ         string       // wallpaper type ("scene", "web", "video", …)
 	ctrlSock    string       // unix socket path for IPC hot-swap / stop
 	readyCh     chan struct{} // closed when LWE signals READY on the ready pipe
 	hotswapping bool         // IPC hot-swap in progress (protected by Renderer.mu)
@@ -236,53 +238,45 @@ func (r *Renderer) startLoadingBgLocked(outputs []hyprOutput) {
 	r.startLoadingBgWithPreviewLocked(entries)
 }
 
+// hyprctlWallpaper preloads an image in the running hyprpaper daemon and
+// assigns it as the wallpaper for the given output via hyprctl IPC.
+// This is more reliable than launching a new hyprpaper process because the
+// daemon's config file (hyprpaper.conf) is read at startup and the --config
+// flag is ignored by many hyprpaper versions.
+func (r *Renderer) hyprctlWallpaper(outputName, imgPath string) {
+	env := waylandEnvOverrides(nil)
+	preload := exec.Command("hyprctl", "hyprpaper", "preload", imgPath)
+	preload.Env = env
+	if err := preload.Run(); err != nil {
+		log.Printf("[renderer] hyprpaper preload %s: %v", imgPath, err)
+		return
+	}
+	set := exec.Command("hyprctl", "hyprpaper", "wallpaper", outputName+","+imgPath)
+	set.Env = env
+	if err := set.Run(); err != nil {
+		log.Printf("[renderer] hyprpaper wallpaper %s: %v", outputName, err)
+	}
+}
+
 func (r *Renderer) startLoadingBgWithPreviewLocked(entries []loadingOutputEntry) {
 	if err := ensureLoadingPNG(); err != nil {
 		log.Printf("[renderer] loading PNG: %v", err)
 		return
 	}
-
-	var cfg strings.Builder
-	cfg.WriteString("splash = false\n")
-	cfg.WriteString("preload = " + loadingPNGPath + "\n")
-
-	// Preload any preview images that exist on disk
-	preloaded := map[string]bool{loadingPNGPath: true}
-	for _, e := range entries {
-		if e.previewPath != "" && !preloaded[e.previewPath] {
-			if _, err := os.Stat(e.previewPath); err == nil {
-				cfg.WriteString("preload = " + e.previewPath + "\n")
-				preloaded[e.previewPath] = true
-			}
-		}
-	}
-
+	log.Printf("[renderer] loading placeholder on %d output(s)", len(entries))
 	for _, e := range entries {
 		img := loadingPNGPath
-		if e.previewPath != "" && preloaded[e.previewPath] {
-			img = e.previewPath
+		if e.previewPath != "" {
+			if _, err := os.Stat(e.previewPath); err == nil {
+				img = e.previewPath
+			}
 		}
-		cfg.WriteString("wallpaper = " + e.output.Name + "," + img + "\n")
+		go r.hyprctlWallpaper(e.output.Name, img)
 	}
-
-	cfgPath := "/tmp/wepapered-hyprpaper.conf"
-	if err := os.WriteFile(cfgPath, []byte(cfg.String()), 0644); err != nil {
-		log.Printf("[renderer] hyprpaper config: %v", err)
-		return
-	}
-	cmd := exec.Command("hyprpaper", "--config", cfgPath)
-	cmd.Env = waylandEnvOverrides(nil)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Start(); err != nil {
-		log.Printf("[renderer] hyprpaper start: %v", err)
-		return
-	}
-	log.Printf("[renderer] loading placeholder pid=%d on %d output(s)", cmd.Process.Pid, len(entries))
-	r.loadingProcs = append(r.loadingProcs, cmd)
 }
 
 func (r *Renderer) stopLoadingBgLocked() {
+	// loadingProcs kept for compatibility but no longer populated.
 	for _, cmd := range r.loadingProcs {
 		if cmd.Process != nil {
 			cmd.Process.Kill()
@@ -290,6 +284,7 @@ func (r *Renderer) stopLoadingBgLocked() {
 		}
 	}
 	r.loadingProcs = nil
+	// hyprctl wallpapers are covered by LWE once it renders; no explicit removal needed.
 }
 
 // ── Apply (diff-based with IPC hot-swap) ─────────────────────────────────────
@@ -371,12 +366,13 @@ func (r *Renderer) Apply(state *DaemonState) {
 	}
 
 	type hwWork struct {
-		sp        *screenProc
-		newBg     string
-		presetDir string
-		props     map[string]string
+		sp          *screenProc
+		newBg       string
+		presetDir   string
+		props       map[string]string
 		previewPath string
-		output    string
+		output      string
+		newTyp      string
 	}
 	var toStop []*screenProc
 	var toHotswap []hwWork
@@ -389,9 +385,9 @@ func (r *Renderer) Apply(state *DaemonState) {
 			if sp.cmd.Process != nil {
 				sp.cmd.Process.Signal(syscall.SIGTERM)
 			}
-		} else if w.bgDir != sp.bgDir {
+		} else if w.bgDir != sp.bgDir || w.presetDir != sp.presetDir {
 			if sp.ctrlSock != "" && !sp.hotswapping {
-				toHotswap = append(toHotswap, hwWork{sp, w.bgDir, w.presetDir, w.props, w.previewPath, outName})
+				toHotswap = append(toHotswap, hwWork{sp, w.bgDir, w.presetDir, w.props, w.previewPath, outName, w.typ})
 				sp.hotswapping = true
 			} else if !sp.hotswapping {
 				// No ctrl socket yet or process died: kill and restart.
@@ -418,8 +414,9 @@ func (r *Renderer) Apply(state *DaemonState) {
 		}
 	}
 
-	// Loading bg covers: new starts + hot-swapping screens.
-	// Use the incoming wallpaper's preview image when available.
+	// Loading bg only for genuinely new screens — NOT for IPC hot-swaps.
+	// During a hot-swap, LWE keeps the old wallpaper's last frame on the
+	// Wayland surface, so a black placeholder only makes the transition worse.
 	var loadingEntries []loadingOutputEntry
 	for _, o := range startingOutputs {
 		preview := ""
@@ -428,21 +425,14 @@ func (r *Renderer) Apply(state *DaemonState) {
 		}
 		loadingEntries = append(loadingEntries, loadingOutputEntry{o, preview})
 	}
-	for _, hw := range toHotswap {
-		for _, o := range outputs {
-			if o.Name == hw.output {
-				loadingEntries = append(loadingEntries, loadingOutputEntry{o, hw.previewPath})
-				break
-			}
-		}
-	}
 
 	if len(toStop) == 0 && len(startingOutputs) == 0 && len(toHotswap) == 0 {
 		return
 	}
 
+	// Always clean up any stale loading placeholder first.
+	r.stopLoadingBgLocked()
 	if len(loadingEntries) > 0 {
-		r.stopLoadingBgLocked()
 		r.startLoadingBgWithPreviewLocked(loadingEntries)
 	}
 
@@ -466,45 +456,71 @@ func (r *Renderer) Apply(state *DaemonState) {
 		log.Printf("[renderer] %s → %s : %s (%s)", w.label, outName, w.title, w.typ)
 		sp := r.launchScreenLocked(outName, w.bgDir, w.presetDir, w.props, assetsDir)
 		if sp != nil {
+			sp.typ = w.typ
 			r.screens[outName] = sp
 			allReadyChs = append(allReadyChs, sp.readyCh)
 		}
 	}
 
-	// Initiate IPC hot-swaps in background goroutines
+	// Hot-swap goroutines.
+	// Strategy:
+	//  • Non-web old wallpaper → parallel launch: new LWE starts alongside old,
+	//    old stays visible until new renders first frame (seamless, no black gap).
+	//  • Web old wallpaper → sequential: kill old first, then start new.
+	//    CEF uses a shared profile/UKM database; two simultaneous CEF processes
+	//    on the same output cause a database lock → 0×0 canvas → black.
 	capturedAssetsDir := assetsDir
 	for _, hw := range toHotswap {
 		hwDoneCh := make(chan struct{})
 		allReadyChs = append(allReadyChs, hwDoneCh)
 
-		hwSp, hwNewBg, hwPresetDir, hwProps, hwOut := hw.sp, hw.newBg, hw.presetDir, hw.props, hw.output
+		hwSp, hwNewBg, hwPresetDir, hwProps, hwOut, hwTyp := hw.sp, hw.newBg, hw.presetDir, hw.props, hw.output, hw.sp.typ
 
 		go func() {
 			defer close(hwDoneCh)
 			log.Printf("[renderer] hot-swap %s → %s", hwOut, hwNewBg)
 
-			if err := sendCtrlLoadJSON(hwSp.ctrlSock, hwNewBg, hwPresetDir, hwProps); err != nil {
-				log.Printf("[renderer] hot-swap %s failed (%v), falling back to restart", hwOut, err)
+			oldIsWeb := strings.EqualFold(hwTyp, "web")
+
+			if oldIsWeb {
+				// Sequential: kill old CEF process first to release the shared profile lock.
 				if hwSp.cmd.Process != nil {
 					hwSp.cmd.Process.Signal(syscall.SIGTERM)
 				}
 				<-hwSp.doneCh
-
 				r.mu.Lock()
 				delete(r.screens, hwOut)
 				hwSp.hotswapping = false
-				newSp := r.launchScreenLocked(hwOut, hwNewBg, hwPresetDir, hwProps, capturedAssetsDir)
-				if newSp != nil {
-					r.screens[hwOut] = newSp
-				}
 				r.mu.Unlock()
+			}
+
+			// Launch new LWE (in parallel if old was not web, sequentially otherwise).
+			r.mu.Lock()
+			newSp := r.launchScreenLocked(hwOut, hwNewBg, hwPresetDir, hwProps, capturedAssetsDir)
+			if newSp != nil {
+				newSp.typ = hw.newTyp
+				r.screens[hwOut] = newSp
+				if !oldIsWeb {
+					hwSp.hotswapping = false
+				}
+			}
+			r.mu.Unlock()
+
+			if newSp == nil {
 				return
 			}
 
-			r.mu.Lock()
-			hwSp.bgDir = hwNewBg
-			hwSp.hotswapping = false
-			r.mu.Unlock()
+			// Wait for new LWE's first frame.
+			select {
+			case <-newSp.readyCh:
+			case <-time.After(10 * time.Second):
+				log.Printf("[renderer] hot-swap %s: READY timeout", hwOut)
+			}
+
+			if !oldIsWeb && hwSp.cmd.Process != nil {
+				// Parallel path: retire old only after new is ready.
+				hwSp.cmd.Process.Signal(syscall.SIGTERM)
+			}
 			log.Printf("[renderer] hot-swap %s: complete", hwOut)
 		}()
 	}
@@ -607,13 +623,15 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 
 	doneCh := make(chan struct{})
 	sp := &screenProc{
-		cmd:      cmd,
-		doneCh:   doneCh,
-		output:   outputName,
-		bgDir:    bgDir,
-		ctrlSock: ctrlSockPath,
-		readyCh:  readyCh,
+		cmd:       cmd,
+		doneCh:    doneCh,
+		output:    outputName,
+		bgDir:     bgDir,
+		presetDir: presetDir,
+		ctrlSock:  ctrlSockPath,
+		readyCh:   readyCh,
 	}
+	// typ is set by Apply() after creation
 	startTime := time.Now()
 	go func() {
 		defer close(doneCh)
