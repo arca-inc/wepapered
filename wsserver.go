@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -225,7 +226,19 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		return
 	}
 	winPath, _ := args[0].(string)
-	monitor, _ := args[1].(string)
+	
+	monitor := ""
+	switch v := args[1].(type) {
+	case string:
+		monitor = v
+	case float64:
+		monitor = fmt.Sprintf("%d", int(v))
+	}
+	
+	if _, err := strconv.Atoi(monitor); err == nil {
+		monitor = "Monitor" + monitor
+	}
+
 	if winPath == "" || monitor == "" {
 		return
 	}
