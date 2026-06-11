@@ -228,19 +228,19 @@ BRIDGE_OBJECTS.forEach(function(name) {
 					if (typeof prop === 'symbol') return undefined;
 					return function() {
 						var args = Array.prototype.slice.call(arguments);
+						var cbName = name + '_' + prop + '_callback_' + Math.floor(Math.random()*10000);
+						sendToBridge({
+							object: name,
+							method: prop,
+							args: args,
+							callback: cbName
+						});
 						return {
 							then: function(cb) {
-								var cbName = name + '_' + prop + '_callback_' + Math.floor(Math.random()*10000);
 								window[cbName] = function() {
 									delete window[cbName];
 									if(cb) cb.apply(null, arguments);
 								};
-								sendToBridge({
-									object: name,
-									method: prop,
-									args: args,
-									callback: cbName
-								});
 							}
 						};
 					};
