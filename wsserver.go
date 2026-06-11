@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -37,6 +38,12 @@ type WSServer struct {
 	monitorInfos []MonitorInfo // populated from applyGeneral
 	renderer     *Renderer
 	discord      *DiscordRP
+
+	// Debounce state for queryWorkshop (see handleQueryWorkshop).
+	qwMu    sync.Mutex
+	qwTimer *time.Timer
+	qwConn  *websocket.Conn
+	qwMsg   WEMessage
 }
 
 func newWSServer(cfg *Config) *WSServer {

@@ -8,11 +8,38 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+// handleQueryWorkshop debounces incoming Workshop queries. The browse UI fires
+// queryWorkshop in bursts (tab switch, filter init, and — fatally — on every
+// rejected response) and resolves them all through the single shared
+// window.queryWorkshopCallback slot. Because our Steam HTTP round-trip is slow
+// (~0.8s) compared with the native client, multiple queries are in flight at
+// once: by the time an early response arrives, the slot points at a later
+// request, the token no longer matches, and the UI re-queries — an endless
+// loop ("En attente d'une réponse de Steam…"). Coalescing a burst into a single
+// query for the *latest* request means the response token matches the slot the
+// UI is actually waiting on, so it's accepted and the loop never starts.
 func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
+	s.qwMu.Lock()
+	s.qwConn = conn
+	s.qwMsg = msg
+	if s.qwTimer != nil {
+		s.qwTimer.Stop()
+	}
+	s.qwTimer = time.AfterFunc(250*time.Millisecond, func() {
+		s.qwMu.Lock()
+		c, m := s.qwConn, s.qwMsg
+		s.qwMu.Unlock()
+		s.doQueryWorkshop(c, m)
+	})
+	s.qwMu.Unlock()
+}
+
+func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	if s.cfg.SteamAPIKey == "" {
 		log.Println("[WE] queryWorkshop: missing Steam API key")
 		s.sendCallback(conn, msg.Callback, map[string]interface{}{"wallpapers": []UIWallpaper{}, "total": 0})
