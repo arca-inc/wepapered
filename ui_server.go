@@ -51,18 +51,28 @@ func (s *WSServer) serveUI(w http.ResponseWriter, r *http.Request) {
 // wepapered bridge shim for hosted CEF UI
 
 window.__wepLocale = ` + string(localeJSON) + `;
-window.wepaperedBridge = new WebSocket('ws://' + location.host + '/we');
 window.wepaperedQueue = [];
 
-window.wepaperedBridge.onopen = function() {
-	while (window.wepaperedQueue.length > 0) {
-		window.wepaperedBridge.send(window.wepaperedQueue.shift());
-	}
-};
+// Reconnecting bridge: the daemon may restart (dev rebuilds, crashes) and the
+// CEF UI window is long-lived, so reconnect instead of going dead until reload.
+// The actual message handler is installed later as window.__bridgeOnMessage;
+// every (re)connected socket dispatches through it, and the daemon re-pushes
+// library/locale/state on each connect.
+function connectBridge() {
+	var ws = new WebSocket('ws://' + location.host + '/we');
+	window.wepaperedBridge = ws;
+	ws.onopen = function() {
+		while (window.wepaperedQueue.length > 0) { ws.send(window.wepaperedQueue.shift()); }
+	};
+	ws.onmessage = function(e) { if (window.__bridgeOnMessage) window.__bridgeOnMessage(e); };
+	ws.onclose = function() { setTimeout(connectBridge, 2000); };
+	ws.onerror = function() { try { ws.close(); } catch (e) {} };
+}
+connectBridge();
 
 function sendToBridge(payload) {
 	var data = JSON.stringify(payload);
-	if (window.wepaperedBridge.readyState === 1) {
+	if (window.wepaperedBridge && window.wepaperedBridge.readyState === 1) {
 		window.wepaperedBridge.send(data);
 	} else {
 		window.wepaperedQueue.push(data);
@@ -189,7 +199,7 @@ Object.defineProperty(window, 'browseWallpapersCtrl', {
 	}
 });
 
-window.wepaperedBridge.onmessage = function(e) {
+window.__bridgeOnMessage = function(e) {
 	var msg = JSON.parse(e.data);
 	if (msg.type === 'state') {
 		window.daemonState = msg.state;
