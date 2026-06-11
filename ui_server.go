@@ -199,11 +199,50 @@ Object.defineProperty(window, 'browseWallpapersCtrl', {
 	}
 });
 
+// Live workshop download feedback: the daemon relays Steam's progress as
+// {type:'wsprogress', workshopid, status, percent, label}. WE's grid shows a
+// download ring when a wallpaper object's status is "downloading" and reads its
+// downloadpercent/downloadlabel, so we mutate the matching object in place (the
+// native client does the same) and trigger a digest.
+function findWpByWorkshopId(id) {
+	var c = window.browseWallpapersCtrl;
+	if (!c) return null;
+	var lists = [c.sortedWallpapers, c.queryWallpapers, c.wallpapers];
+	for (var li = 0; li < lists.length; li++) {
+		var L = lists[li];
+		if (!L) continue;
+		for (var i = 0; i < L.length; i++) {
+			if (L[i] && (String(L[i].workshopid) === String(id) || String(L[i].file) === String(id))) return L[i];
+		}
+	}
+	return null;
+}
+function applyWorkshopProgress(msg) {
+	var wp = findWpByWorkshopId(msg.workshopid);
+	if (!wp) return;
+	if (msg.status === 'installed') {
+		wp.status = 'installed';
+		wp.downloadpercent = 100;
+		wp.downloadlabel = '';
+	} else {
+		wp.status = 'downloading';
+		if (typeof msg.percent === 'number') wp.downloadpercent = msg.percent;
+		wp.downloadlabel = msg.label || '';
+	}
+	var c = window.browseWallpapersCtrl;
+	try {
+		if (c.$$phase || (c.$root && c.$root.$$phase)) { c.$evalAsync(function(){}); }
+		else { c.$apply(); }
+	} catch (e) {}
+}
+
 window.__bridgeOnMessage = function(e) {
 	var msg = JSON.parse(e.data);
 	if (msg.type === 'state') {
 		window.daemonState = msg.state;
 		setTimeout(function() { updateUIState(); }, 100);
+	} else if (msg.type === 'wsprogress') {
+		applyWorkshopProgress(msg);
 	} else if (msg.type === 'library') {
 		if (window.browseWallpapersCtrl) {
 			if (window.browseWallpapersCtrl.setListSource) {

@@ -31,9 +31,26 @@ func (s *WSServer) handleUI(conn *websocket.Conn, msg WEMessage) {
 		// the helper isn't available, fall back to opening the Steam Workshop page.
 		ids := collectWorkshopIDs(msg.Args)
 		log.Printf("[WE] subscribeWorkshopItem %v", ids)
-		ok := steamSubscribeDownload(ids, func(id string) {
-			notifyUser(fmt.Sprintf("Wallpaper téléchargé (%s)", id))
-		})
+		ok := steamSubscribeDownload(ids,
+			func(id string, down, total uint64) {
+				pct := 0.0
+				label := ""
+				if total > 0 {
+					pct = float64(down) * 100 / float64(total)
+					label = fmt.Sprintf("%.0f%%", pct)
+				}
+				s.Broadcast(map[string]interface{}{
+					"type": "wsprogress", "workshopid": id,
+					"status": "downloading", "percent": pct, "label": label,
+				})
+			},
+			func(id string) {
+				notifyUser(fmt.Sprintf("Wallpaper téléchargé (%s)", id))
+				s.Broadcast(map[string]interface{}{
+					"type": "wsprogress", "workshopid": id,
+					"status": "installed", "percent": 100.0, "label": "",
+				})
+			})
 		if !ok {
 			for _, id := range ids {
 				log.Printf("[WE] steam-ugc unavailable — opening Steam Workshop page for %s", id)

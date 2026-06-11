@@ -26,6 +26,8 @@ extern void *SteamAPI_SteamUGC_v021(void);
 extern SteamAPICall_t SteamAPI_ISteamUGC_SubscribeItem(void *self, PublishedFileId_t id);
 extern bool     SteamAPI_ISteamUGC_DownloadItem(void *self, PublishedFileId_t id, bool bHighPriority);
 extern uint32_t SteamAPI_ISteamUGC_GetItemState(void *self, PublishedFileId_t id);
+extern bool     SteamAPI_ISteamUGC_GetItemDownloadInfo(void *self, PublishedFileId_t id,
+                    uint64_t *punBytesDownloaded, uint64_t *punBytesTotal);
 extern uint32_t SteamAPI_ISteamUGC_GetNumSubscribedItems(void *self);
 
 enum {
@@ -61,6 +63,8 @@ int main(int argc, char **argv) {
         if (!id) { fprintf(stderr, "bad id %s\n", argv[a]); rc = 2; continue; }
         SteamAPI_ISteamUGC_SubscribeItem(ugc, id);
         SteamAPI_ISteamUGC_DownloadItem(ugc, id, true);
+        printf("progress %llu 0 0\n", (unsigned long long)id);
+        fflush(stdout);
         int done = 0;
         for (int i = 0; i < 3000; i++) { // up to ~10 min
             SteamAPI_RunCallbacks();
@@ -71,6 +75,16 @@ int main(int argc, char **argv) {
                 fflush(stdout);
                 done = 1;
                 break;
+            }
+            // Emit progress roughly twice a second while bytes are flowing.
+            if (i % 3 == 0) {
+                uint64_t down = 0, total = 0;
+                if (SteamAPI_ISteamUGC_GetItemDownloadInfo(ugc, id, &down, &total) && total > 0) {
+                    printf("progress %llu %llu %llu\n",
+                           (unsigned long long)id, (unsigned long long)down,
+                           (unsigned long long)total);
+                    fflush(stdout);
+                }
             }
             usleep(200000); // 200 ms
         }
