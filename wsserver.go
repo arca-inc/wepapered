@@ -160,6 +160,8 @@ func (s *WSServer) dispatch(conn *websocket.Conn, msg WEMessage) {
 		s.handleSettings(conn, msg)
 	case "installObject":
 		s.handleInstall(conn, msg)
+	case "ui":
+		s.handleUI(conn, msg)
 	default:
 		log.Printf("[WE→] %s.%s (callback=%s)", msg.Object, msg.Method, msg.Callback)
 	}
