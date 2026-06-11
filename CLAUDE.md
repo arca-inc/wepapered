@@ -1,0 +1,75 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this is
+
+`wepapered` is a Go daemon that bridges the official **Wallpaper Engine** (the Windows app, run under Proton/Wine on Linux) to **linux-wallpaperengine (LWE)** for actual rendering on a Hyprland/Wayland desktop. The user browses and picks wallpapers in WE's real UI; wepapered intercepts those selections over a WebSocket and renders them natively via per-monitor LWE subprocesses.
+
+The flow: **WE UI (JS spy) → WebSocket → daemon state → LWE subprocess per monitor → Wayland output**. The daemon also writes selections back into WE's own `config.json` so WE remembers them, and watches that file to re-assert state when WE clears it.
+
+## Build & run
+
+This is a **CGo** project that links against a prebuilt LWE shared library (`lwe/` git submodule, the `arca-inc/lwe-patched` fork on the `wepapered` branch). The LWE library must be built first.
+
+```bash
+# 1. Init the submodule (first checkout only)
+git submodule update --init --recursive
+
+# 2. Build the LWE library + helper binaries into lwe/build/output/
+cd lwe && mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ..
+make                       # produces liblinux-wallpaperengine-lib.so, linux-wallpaperengine, lwe-cef-subprocess
+
+# 3. Build the daemon (CGo cflags/ldflags in lwe.go point at lwe/build/output)
+cd /home/warmadon/wepapered
+go build -o wepapered .
+
+# Run
+./wepapered            # daemon mode
+./wepapered --ui       # GTK3 config window to set the WE install path
+```
+
+There is **no test suite, linter config, or CI** in this repo. `go build ./...` / `go vet ./...` are the available checks.
+
+Runtime requirements: must run as the **session user** (not root — embedded LWE/CEF cannot reach Wayland as root; the code has fallbacks using `sudo -u`/`SUDO_USER` but the normal path is the logged-in user). Hyprland must be running (`hyprctl` is shelled out to). `hyprpaper` is used for loading placeholders.
+
+## Key paths & environment
+
+- WE install path: stored in `~/.config/wepapered/config.json`; auto-detected from common Steam locations (`config.go:autoDetectWEPath`).
+- Daemon state (active wallpaper per monitor): `~/.config/wepapered/state.json` (`state.go`).
+- WebSocket server: `127.0.0.1:9001`, path `/we` (`wsserver.go`). The WE UI must be injected with a JS spy that connects here — that injection lives in the patched WE/LWE side, not this repo.
+- `LWE_OUTPUT_DIR` env var overrides where the LWE binaries are found (`lwe.go`); defaults to `lwe/build/output` in dev, or the dir next to the `wepapered` executable when packaged.
+- Per-screen IPC sockets: `/tmp/wepapered-ctrl-<output>.sock`. Loading placeholder image: `/tmp/wepapered-loading.png`.
+
+## Architecture
+
+Single `main` package; each file is one subsystem:
+
+- **`main.go`** — entry point. Daemon mode wires up `WSServer` → `Renderer` → `Watcher`, applies saved state on startup, and runs the watchdog loop that drains `renderer.applyTrigger`.
+- **`wsserver.go`** — WebSocket server that the WE UI's JS spy connects to. Parses intercepted WE method calls (`browseWallpaperObject.selectWallpaper`, `settingsObject.applyGeneral`). On a selection it resolves metadata, updates state, persists back to WE config, fires a desktop notification, and triggers `renderer.Apply`.
+- **`state.go`** — `DaemonState` / `MonitorWallpaper` models, JSON persistence, Windows↔Linux path translation (`winToLinux`: `S:` = steamapps root, `Z:` = Linux root via Wine), `project.json` parsing, and wallpaper **type inference**. Crucial concept: a wallpaper may be a thin "preset" that depends on a separate framework workshop item (`dependency` field) — in that case `RenderDir` points at the framework (HTML/JS) and `PresetDir` at the original wallpaper's assets, with `Props` carrying preset overrides.
+- **`renderer.go`** — the heart of the project. Runs **one `linux-wallpaperengine` subprocess per Wayland output**, keyed by output name. `Apply(state)` diffs desired-vs-running and decides per screen: start, stop, or **hot-swap**. Monitor labels `Monitor0/1/…` map to outputs sorted left-to-right by x,y from `hyprctl monitors`.
+- **`watcher.go`** — fsnotify watch on WE's `config.json`; when WE clears `selectedwallpapers`, debounce-rewrites our state back into it so WE doesn't win the fight.
+- **`weconfig.go`** — writing `selectedwallpapers` back into WE's `config.json`, keyed by Windows device path (from `monitormap`) with `MonitorN` fallback.
+- **`lwe.go`** — CGo bridge to `liblinux-wallpaperengine-lib.so`. Note: the embedded `lwe_run` path is **legacy/unused for rendering** — the renderer launches the `linux-wallpaperengine` *binary* as subprocesses instead. CGo is still used for `lwe_set_subprocess_path`.
+- **`ui.go`** — GTK3 config window (`--ui`). UI strings are in French.
+
+### Rendering model (the hard part)
+
+The renderer is concurrency-heavy; read `renderer.go` before touching it. Invariants:
+
+- All `screenProc` map mutation happens under `Renderer.mu`. Methods named `*Locked` assume the lock is held; some release and re-acquire it while waiting on `doneCh`.
+- **Hot-swap vs restart**: wallpaper changes prefer a JSON `load` command over the per-screen ctrl socket (`sendCtrlLoadJSON`, LWE replies `READY`). Only if there's no socket / it fails does the process get killed and relaunched.
+- **Web (CEF) wallpapers are special-cased**: two CEF processes on the same output share a profile/UKM database and deadlock → black screen. So when the *old* wallpaper is `web`, the swap is **sequential** (kill old, then start new); for non-web it's **parallel** (start new alongside old, retire old only after the new one's first frame) for a seamless transition.
+- **READY signaling**: each subprocess gets a pipe on fd 3 and `WEPAPERED_READY_FD=3`; LWE writes `READY` when its first frame paints. Used to time placeholder removal and old-process retirement.
+- **Watchdog / crash backoff**: when a subprocess dies unexpectedly it's removed from the map and a re-apply is scheduled with linear backoff, giving up after 5 rapid crashes (counter resets after 30s uptime).
+- **Unsupported types** (anything not scene/video/web/image) render a generated "Wallpaper non supporté" web page instead of failing silently (`errorWallpaperDir`).
+
+### Subprocess env (`lweSubprocEnv`)
+
+LWE subprocesses need a carefully constructed Wayland environment: `XDG_SESSION_TYPE=wayland`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, the Hyprland instance signature, plus `LD_LIBRARY_PATH`/`LD_PRELOAD` pointing at the LWE output dir (for bundled CEF libs and the ICU fix shim) and `LWE_CEF_SUBPROCESS_PATH` set to the minimal `lwe-cef-subprocess` helper (the full binary would try to init Wayland when CEF spawns it as a renderer and deadlock).
+
+## Working with the submodule
+
+`lwe/` is the patched LWE fork. The C-ABI contract between the daemon and LWE is in `lwe/src/lwe_bridge.h` and the ctrl-socket / READY-fd protocol is implemented in `lwe/src/main.cpp` (look for `WEPAPERED_CTRL_SOCK` / `WEPAPERED_READY_FD`). If you change that protocol you must update both `renderer.go` (Go side) and the LWE C++ side, and rebuild the library before rebuilding the daemon.

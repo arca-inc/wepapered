@@ -1,15 +1,19 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+
+	"fyne.io/systray"
 )
 
 func main() {
 	ui := flag.Bool("ui", false, "open config window")
+	dumpLib := flag.Bool("dump-library", false, "print the enumerated wallpaper library as JSON and exit")
 	flag.Parse()
 
 	cfg, err := loadConfig()
@@ -23,20 +27,37 @@ func main() {
 		return
 	}
 
-	// Daemon mode
-	if cfg.WEPath == "" {
-		cfg.WEPath = autoDetectWEPath()
-		if cfg.WEPath == "" {
+	if *dumpLib {
+		lib := enumerateLibrary(resolveWEPath(cfg))
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		enc.Encode(lib) //nolint
+		return
+	}
+
+	// Daemon mode — resolve (and repair) the WE path: auto-detect if the
+	// configured one is empty or no longer points at a real install (e.g. a
+	// stale Flatpak path after switching to a native Steam, or a fresh install).
+	if !weDirValid(cfg.WEPath) {
+		resolved := resolveWEPath(cfg)
+		if resolved == "" {
 			log.Fatal("Wallpaper Engine path not found. Run `wepapered --ui` to configure.")
 		}
+		if resolved != cfg.WEPath {
+			log.Printf("WE path %q invalid; auto-detected %q", cfg.WEPath, resolved)
+		}
+		cfg.WEPath = resolved
 		if err := saveConfig(cfg); err != nil {
 			log.Printf("could not save config: %v", err)
 		}
-		log.Printf("auto-detected WE path: %s", cfg.WEPath)
 	}
 
 	ws := newWSServer(cfg)
 	ws.Start("127.0.0.1:9001")
+
+	// Discord Rich Presence (optional; connects in the background when Discord runs).
+	go ws.discord.Run()
+	ws.updateDiscordPresence()
 
 	// Apply saved wallpapers immediately on startup.
 	if len(ws.state.Monitors) > 0 {
@@ -61,10 +82,22 @@ func main() {
 		log.Fatalf("watcher start failed: %v", err)
 	}
 
+	tray := newTrayManager(cfg)
+	
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	
+	go func() {
+		<-sig
+		log.Println("[wepapered] signal received, stopping")
+		systray.Quit()
+	}()
+
+	// tray.Run() blocks the main thread
+	tray.Run()
+
 	log.Println("[wepapered] stopping")
 	w.Stop()
 	ws.renderer.Stop()
+	ws.discord.Close()
 }

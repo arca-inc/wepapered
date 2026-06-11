@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -34,6 +35,7 @@ type WSServer struct {
 	state        *DaemonState
 	monitorInfos []MonitorInfo // populated from applyGeneral
 	renderer     *Renderer
+	discord      *DiscordRP
 }
 
 func newWSServer(cfg *Config) *WSServer {
@@ -42,12 +44,45 @@ func newWSServer(cfg *Config) *WSServer {
 		cfg:      cfg,
 		state:    loadState(),
 		renderer: newRenderer(cfg),
+		discord:  newDiscordRP(),
 	}
+}
+
+// updateDiscordPresence sets the Discord Rich Presence. The app name ("WePapered",
+// from the Discord app registry) renders above the details line, giving:
+//   WePapered
+//   Patched for Linux
+func (s *WSServer) updateDiscordPresence() {
+	if s.discord == nil {
+		return
+	}
+	s.discord.SetActivity("Patched for Linux", "")
 }
 
 func (s *WSServer) Start(addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/we", s.handle)
+	mux.HandleFunc("/ui/", s.serveUI)
+	localeHandler := func(w http.ResponseWriter, r *http.Request) {
+		reqPath := r.URL.Path[strings.LastIndex(r.URL.Path, "locale/")+len("locale/"):]
+		lang := strings.TrimSuffix(reqPath, ".json")
+		log.Printf("[wepapered] UI requested locale: %s", lang)
+		if table := loadLocale(s.cfg.WEPath, lang); len(table) > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(table)
+			return
+		}
+		filePath := filepath.Join(s.cfg.WEPath, "locale", reqPath)
+		http.ServeFile(w, r, filePath)
+	}
+	mux.HandleFunc("/locale/", localeHandler)
+	mux.HandleFunc("/ui/locale/", localeHandler)
+	mux.HandleFunc("/steamapps/", func(w http.ResponseWriter, r *http.Request) {
+		reqPath := r.URL.Path[len("/steamapps/"):]
+		steamappsPath := filepath.Join(s.cfg.WEPath, "..", "..")
+		filePath := filepath.Join(steamappsPath, reqPath)
+		http.ServeFile(w, r, filePath)
+	})
 	go func() {
 		log.Printf("[wepapered] WS server on %s", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
@@ -73,6 +108,11 @@ func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
 	}); err == nil {
 		conn.WriteMessage(websocket.TextMessage, stateData)
 	}
+
+	// Push the library + translations so a hosted UI client (CEF/probe) can
+	// populate the browse grid with no Wallpaper Engine process. Harmless to the
+	// legacy inject spy, which ignores unknown message types.
+	s.sendHostedUIData(conn)
 
 	defer func() {
 		s.mu.Lock()
@@ -101,7 +141,7 @@ func (s *WSServer) dispatch(conn *websocket.Conn, msg WEMessage) {
 		return
 	}
 	if msg.Callback != "" {
-		log.Printf("[WE←C++] callback=%s", msg.Callback)
+		s.handleCallbackMessage(conn, msg)
 		return
 	}
 
@@ -112,6 +152,40 @@ func (s *WSServer) dispatch(conn *websocket.Conn, msg WEMessage) {
 		s.handleSettings(conn, msg)
 	default:
 		log.Printf("[WE→] %s.%s", msg.Object, msg.Method)
+	}
+}
+
+func (s *WSServer) handleCallbackMessage(conn *websocket.Conn, msg WEMessage) {
+	log.Printf("[WE←C++] Object=%s Method=%s callback=%s", msg.Object, msg.Method, msg.Callback)
+	
+	// Try to reply to getMonitors if it asks
+	if msg.Object == "browseWallpaperObject" && (msg.Method == "getMonitors" || msg.Method == "getDisplays") {
+		var monitorsArray []map[string]interface{}
+		loc := 0
+		for label := range s.state.Monitors {
+			idx := loc
+			fmt.Sscanf(label, "Monitor%d", &idx)
+			monitorsArray = append(monitorsArray, map[string]interface{}{
+				"index":      idx,
+				"location":   idx,
+				"name":       label,
+				"devicePath": label,
+				"deviceName": label,
+				"isClone":    false,
+				"isInGroup":  false,
+				"x0":         idx * 1920,
+				"y0":         0,
+				"x1":         (idx + 1) * 1920,
+				"y1":         1080,
+			})
+			loc++
+		}
+		
+		reply, _ := json.Marshal(map[string]interface{}{
+			"callback": msg.Callback,
+			"args": []interface{}{ monitorsArray },
+		})
+		conn.WriteMessage(websocket.TextMessage, reply)
 	}
 }
 
@@ -156,7 +230,12 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		return
 	}
 
-	linuxPath := winToLinux(winPath, s.cfg.WEPath)
+	// The hosted UI sends the Linux directory path directly; the legacy WE inject
+	// spy sends a Windows path (S:/…, Z:/…) that needs translation.
+	linuxPath := winPath
+	if len(winPath) == 0 || winPath[0] != '/' {
+		linuxPath = winToLinux(winPath, s.cfg.WEPath)
+	}
 	workshopID := workshopIDFromPath(winPath)
 	meta := readProjectMeta(linuxPath)
 
@@ -218,9 +297,32 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 
 	log.Printf("[WE] *** %s → %s (%s) [%s]", monitor, mw.Title, mw.Type, workshopID)
 	notifyUser(fmt.Sprintf("%s: %s", monitor, mw.Title))
+	s.updateDiscordPresence()
 
 	// Apply wallpapers via linux-wallpaperengine.
 	go s.renderer.Apply(s.state)
+}
+
+// sendHostedUIData pushes the wallpaper library and the translation table to a
+// freshly connected client. Used by the hosted-UI mode (CEF window / probe).
+func (s *WSServer) sendHostedUIData(conn *websocket.Conn) {
+	lib := enumerateLibrary(s.cfg.WEPath)
+	if data, err := json.Marshal(map[string]interface{}{
+		"type":       "library",
+		"wallpapers": lib,
+	}); err == nil {
+		conn.WriteMessage(websocket.TextMessage, data)
+	}
+
+	locale := loadLocale(s.cfg.WEPath, "en-us")
+	if len(locale) > 0 {
+		if data, err := json.Marshal(map[string]interface{}{
+			"type":  "locale",
+			"table": locale,
+		}); err == nil {
+			conn.WriteMessage(websocket.TextMessage, data)
+		}
+	}
 }
 
 // Broadcast sends a message to all connected WE UI clients.

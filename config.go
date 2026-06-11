@@ -39,6 +39,24 @@ func saveConfig(cfg *Config) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// weDirValid reports whether p looks like a real Wallpaper Engine install.
+func weDirValid(p string) bool {
+	if p == "" {
+		return false
+	}
+	_, err := os.Stat(filepath.Join(p, "config.json"))
+	return err == nil
+}
+
+// resolveWEPath returns the configured path if it is a valid WE install,
+// otherwise falls back to auto-detection. Returns "" if nothing is found.
+func resolveWEPath(cfg *Config) string {
+	if weDirValid(cfg.WEPath) {
+		return cfg.WEPath
+	}
+	return autoDetectWEPath()
+}
+
 // autoDetectWEPath checks common Steam installation locations.
 func autoDetectWEPath() string {
 	home, _ := os.UserHomeDir()

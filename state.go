@@ -103,12 +103,15 @@ func winToLinux(winPath, wePath string) string {
 }
 
 type ProjectJSON struct {
-	Title      string                 `json:"title"`
-	Type       string                 `json:"type"`
-	File       string                 `json:"file"`
-	Preview    string                 `json:"preview"`
-	Dependency string                 `json:"dependency"` // workshop ID of the framework this wallpaper depends on
-	Preset     map[string]interface{} `json:"preset"`     // user property overrides for dependency wallpapers
+	Title         string                 `json:"title"`
+	Type          string                 `json:"type"`
+	File          string                 `json:"file"`
+	Preview       string                 `json:"preview"`
+	Dependency    string                 `json:"dependency"`    // workshop ID of the framework this wallpaper depends on
+	Preset        map[string]interface{} `json:"preset"`        // user property overrides for dependency wallpapers
+	ContentRating string                 `json:"contentrating"` // e.g. "Everyone", "Questionable", "Mature"
+	Tags          []string               `json:"tags"`
+	WorkshopID    string                 `json:"workshopid"`
 }
 
 func readProjectMeta(linuxPath string) *ProjectJSON {
