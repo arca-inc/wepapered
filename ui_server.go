@@ -170,6 +170,7 @@ window.wepaperedBridge.onmessage = function(e) {
 			window.browseWallpapersCtrl.updateWallpapers(msg.wallpapers, []);
 			window.browseWallpapersCtrl.sortWallpapers();
 			window.browseWallpapersCtrl.$apply();
+			setTimeout(function() { updateUIState(); }, 100);
 		} else {
 			window.__pendingLibrary = msg.wallpapers;
 		}
