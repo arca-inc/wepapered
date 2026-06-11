@@ -25,13 +25,20 @@ func (s *WSServer) handleInstall(conn *websocket.Conn, msg WEMessage) {
 func (s *WSServer) handleUI(conn *websocket.Conn, msg WEMessage) {
 	switch msg.Method {
 	case "subscribeWorkshopItem":
-		// The browse grid's Download button subscribes via the Steam client, which
-		// we can't drive without its API. Open each item's Steam Workshop page so
-		// the user can subscribe there (their Steam is running).
+		// The browse grid's Download button subscribes + downloads through the
+		// Steam client via ISteamUGC (steamSubscribeDownload). On success the item
+		// appears under …/workshop/content/431960/<id>/ and we notify the user. If
+		// the helper isn't available, fall back to opening the Steam Workshop page.
 		ids := collectWorkshopIDs(msg.Args)
-		for _, id := range ids {
-			log.Printf("[WE] subscribeWorkshopItem %s — opening Steam Workshop page", id)
-			exec.Command("xdg-open", "steam://url/CommunityFilePage/"+id).Start()
+		log.Printf("[WE] subscribeWorkshopItem %v", ids)
+		ok := steamSubscribeDownload(ids, func(id string) {
+			notifyUser(fmt.Sprintf("Wallpaper téléchargé (%s)", id))
+		})
+		if !ok {
+			for _, id := range ids {
+				log.Printf("[WE] steam-ugc unavailable — opening Steam Workshop page for %s", id)
+				exec.Command("xdg-open", "steam://url/CommunityFilePage/"+id).Start()
+			}
 		}
 		// Resolve the caller's promise (callDeferred waits on <method>Callback).
 		s.sendCallback(conn, msg.Method+"Callback", nil)
