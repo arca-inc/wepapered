@@ -151,6 +151,8 @@ func (s *WSServer) dispatch(conn *websocket.Conn, msg WEMessage) {
 		s.handleBrowse(conn, msg)
 	case "settingsObject":
 		s.handleSettings(conn, msg)
+	case "installObject":
+		s.handleInstall(conn, msg)
 	default:
 		log.Printf("[WE→] %s.%s (callback=%s)", msg.Object, msg.Method, msg.Callback)
 	}
@@ -194,6 +196,8 @@ func (s *WSServer) handleBrowse(conn *websocket.Conn, msg WEMessage) {
 	switch msg.Method {
 	case "selectWallpaper":
 		s.onSelectWallpaper(msg.Args)
+	case "queryWorkshop":
+		s.handleQueryWorkshop(conn, msg)
 	case "persistUserMonitorSettings":
 		log.Printf("[WE] monitor settings persisted")
 	case "persistBrowserSettings":

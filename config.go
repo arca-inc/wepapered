@@ -7,7 +7,9 @@ import (
 )
 
 type Config struct {
-	WEPath string `json:"we_path"`
+	WEPath      string            `json:"we_path"`
+	SteamAPIKey string            `json:"steam_api_key"`
+	Assignments map[string]string `json:"assignments"`
 }
 
 func configPath() string {

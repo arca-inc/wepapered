@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-
 	"github.com/gotk3/gotk3/gtk"
 )
 
@@ -47,6 +45,20 @@ func runConfigUI(cfg *Config) {
 	pathBox.PackStart(entry, true, true, 0)
 	pathBox.PackStart(detectBtn, false, false, 0)
 
+	// API Key row
+	apiBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
+	apiLabel, _ := gtk.LabelNew("Clé d'API Steam (Web):")
+	apiLabel.SetXAlign(0)
+	apiLabel.SetWidthChars(24)
+
+	apiEntry, _ := gtk.EntryNew()
+	apiEntry.SetHExpand(true)
+	apiEntry.SetText(cfg.SteamAPIKey)
+	apiEntry.SetPlaceholderText("Colle ta clé API ici")
+
+	apiBox.PackStart(apiLabel, false, false, 0)
+	apiBox.PackStart(apiEntry, true, true, 0)
+
 	// Status label
 	statusLabel, _ := gtk.LabelNew("")
 	statusLabel.SetXAlign(0)
@@ -58,32 +70,27 @@ func runConfigUI(cfg *Config) {
 	cancelBtn, _ := gtk.ButtonNewWithLabel("Annuler")
 	cancelBtn.Connect("clicked", func() { gtk.MainQuit() })
 
-	saveBtn, _ := gtk.ButtonNewWithLabel("Sauvegarder")
-	if sc, err := saveBtn.GetStyleContext(); err == nil {
-		sc.AddClass("suggested-action")
-	}
+	saveBtn, _ := gtk.ButtonNewWithLabel("Enregistrer")
 	saveBtn.Connect("clicked", func() {
-		text, _ := entry.GetText()
-		if text != "" {
-			if _, err := os.Stat(text); err != nil {
-				statusLabel.SetText("⚠ chemin introuvable")
-				return
-			}
-		}
-		cfg.WEPath = text
+		p, _ := entry.GetText()
+		cfg.WEPath = p
+		apiKey, _ := apiEntry.GetText()
+		cfg.SteamAPIKey = apiKey
+
 		if err := saveConfig(cfg); err != nil {
-			statusLabel.SetText("erreur sauvegarde: " + err.Error())
-			return
+			statusLabel.SetMarkup("<span foreground='red'>Erreur de sauvegarde</span>")
+		} else {
+			gtk.MainQuit()
 		}
-		statusLabel.SetText("✓ sauvegardé")
 	})
 
-	btnBox.PackEnd(saveBtn, false, false, 0)
-	btnBox.PackEnd(cancelBtn, false, false, 0)
+	btnBox.PackStart(cancelBtn, false, false, 0)
+	btnBox.PackStart(saveBtn, false, false, 0)
 
 	box.PackStart(pathBox, false, false, 0)
+	box.PackStart(apiBox, false, false, 0)
 	box.PackStart(statusLabel, false, false, 0)
-	box.PackEnd(btnBox, false, false, 0)
+	box.PackStart(btnBox, false, false, 0)
 
 	win.Add(box)
 	win.ShowAll()
