@@ -143,7 +143,7 @@ func (s *WSServer) dispatch(conn *websocket.Conn, msg WEMessage) {
 	}
 	if msg.Callback != "" {
 		s.handleCallbackMessage(conn, msg)
-		return
+		// If it's a getMonitors or getDisplays call, handleCallbackMessage handles it, but other methods also have callbacks now!
 	}
 
 	switch msg.Object {
@@ -152,7 +152,7 @@ func (s *WSServer) dispatch(conn *websocket.Conn, msg WEMessage) {
 	case "settingsObject":
 		s.handleSettings(conn, msg)
 	default:
-		log.Printf("[WE→] %s.%s", msg.Object, msg.Method)
+		log.Printf("[WE→] %s.%s (callback=%s)", msg.Object, msg.Method, msg.Callback)
 	}
 }
 
