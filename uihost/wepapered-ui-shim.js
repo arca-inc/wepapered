@@ -26,7 +26,10 @@
 
   window.__wepLocale = window.__wepLocale || {};
 
-  function wlog(m) { try { console.log('[wepapered-shim] ' + m); } catch (e) {} }
+  function wlog(m) { 
+    try { console.log('[wepapered-shim] ' + m); } catch (e) {} 
+    send({ type: 'log', msg: m });
+  }
 
   // ── Boot namespace the UI reads before bootstrap ────────────────────────────
   window.global = {
@@ -73,6 +76,7 @@
   }
 
   function send(obj) {
+    wlog('send: ' + obj.object + '.' + obj.method);
     var s = JSON.stringify(obj);
     if (ws && ws.readyState === 1) { try { ws.send(s); } catch (e) {} }
     else if (sendQueue.length < 500) { sendQueue.push(s); }
