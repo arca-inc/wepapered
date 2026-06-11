@@ -203,6 +203,7 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 			Preview:      item.PreviewURL,
 			PreviewSmall: item.PreviewURL,
 			WorkshopID:   item.PublishedFileID,
+			WorkshopURL:  "https://steamcommunity.com/sharedfiles/filedetails/?id=" + item.PublishedFileID,
 			ItemID:       item.PublishedFileID,
 			Tags:         tags,
 			Status:       status,

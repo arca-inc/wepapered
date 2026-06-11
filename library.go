@@ -18,6 +18,7 @@ type UIWallpaper struct {
 	Preview       string   `json:"preview"`      // ready-to-use url (file://…); UI wraps it in url(...)
 	PreviewSmall  string   `json:"previewsmall"`
 	WorkshopID    string   `json:"workshopid,omitempty"`
+	WorkshopURL   string   `json:"workshopurl,omitempty"` // Steam page; openSteamWorkshopPage reads this
 	ItemID        string   `json:"itemid,omitempty"`
 	ContentRating string   `json:"contentrating"`
 	Tags          []string `json:"tags"`
