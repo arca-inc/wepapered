@@ -52,8 +52,15 @@ func main() {
 		}
 	}
 
+	// Clean up any renderers orphaned by a previous instance that didn't shut
+	// down cleanly, so we don't end up with duplicate processes per output.
+	killStrayRenderers()
+
 	ws := newWSServer(cfg)
 	ws.Start("127.0.0.1:9001")
+
+	// Start CEF injector to attach to native Steam WE UI
+	go TryInjectCEF()
 
 	// Discord Rich Presence (optional; connects in the background when Discord runs).
 	go ws.discord.Run()

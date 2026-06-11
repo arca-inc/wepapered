@@ -674,6 +674,20 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 	return sp
 }
 
+// killStrayRenderers terminates leftover linux-wallpaperengine background
+// renderers from a previous daemon instance that exited uncleanly (crash,
+// kill -9, or a shutdown where tray.Run() never returned to run Stop()). The
+// subprocesses aren't in our process group and carry no Pdeathsig, so they
+// otherwise survive and fight the new instance over the same Wayland output
+// (duplicate --screen-root processes → flicker and crash backoff). Called once
+// on daemon startup, before we launch our own renderers. Targets only the
+// per-output bg renderers, never the hosted UI window (--ui-window).
+func killStrayRenderers() {
+	if err := exec.Command("pkill", "-TERM", "-f", "linux-wallpaperengine.*--screen-root").Run(); err == nil {
+		log.Printf("[renderer] cleaned up stray renderers from a previous instance")
+	}
+}
+
 // Stop kills all running renderers and loading placeholders.
 func (r *Renderer) Stop() {
 	r.mu.Lock()
