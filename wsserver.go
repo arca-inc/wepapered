@@ -233,6 +233,12 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		monitor = v
 	case float64:
 		monitor = fmt.Sprintf("%d", int(v))
+	case map[string]interface{}:
+		if loc, ok := v["location"].(float64); ok {
+			monitor = fmt.Sprintf("%d", int(loc))
+		} else if locStr, ok := v["location"].(string); ok {
+			monitor = locStr
+		}
 	}
 	
 	if _, err := strconv.Atoi(monitor); err == nil {
@@ -240,6 +246,7 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 	}
 
 	if winPath == "" || monitor == "" {
+		log.Printf("[WE] ERROR: selectWallpaper ignored (winPath=%q, monitor=%q, rawArg1=%v)", winPath, monitor, args[1])
 		return
 	}
 
