@@ -295,21 +295,19 @@ BRIDGE_OBJECTS.forEach(function(name) {
 					if (typeof prop === 'symbol') return undefined;
 					return function() {
 						var args = Array.prototype.slice.call(arguments);
-						var cbName = name + '_' + prop + '_callback_' + Math.floor(Math.random()*10000);
+						// WE's callDeferred(obj, method, …) registers its reply
+						// handler as window[method + "Callback"] and resolves a
+						// promise from it. Send that exact callback name so the
+						// daemon's echoed reply lands on the handler callDeferred
+						// is waiting on (a random name would resolve nothing and
+						// the caller's promise would hang — e.g. the Workshop
+						// query spinner never clearing).
 						sendToBridge({
 							object: name,
-							method: prop,
+							method: String(prop),
 							args: args,
-							callback: cbName
+							callback: String(prop) + 'Callback'
 						});
-						return {
-							then: function(cb) {
-								window[cbName] = function() {
-									delete window[cbName];
-									if(cb) cb.apply(null, arguments);
-								};
-							}
-						};
 					};
 				}
 			}),

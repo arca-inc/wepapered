@@ -15,17 +15,17 @@ import (
 func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	if s.cfg.SteamAPIKey == "" {
 		log.Println("[WE] queryWorkshop: missing Steam API key")
-		s.sendCallback(conn, msg.Callback, []UIWallpaper{})
+		s.sendCallback(conn, msg.Callback, map[string]interface{}{"wallpapers": []UIWallpaper{}, "total": 0})
 		return
 	}
 
 	if len(msg.Args) == 0 {
-		s.sendCallback(conn, msg.Callback, []UIWallpaper{})
+		s.sendCallback(conn, msg.Callback, map[string]interface{}{"wallpapers": []UIWallpaper{}, "total": 0})
 		return
 	}
 	opts, ok := msg.Args[0].(map[string]interface{})
 	if !ok {
-		s.sendCallback(conn, msg.Callback, []UIWallpaper{})
+		s.sendCallback(conn, msg.Callback, map[string]interface{}{"wallpapers": []UIWallpaper{}, "total": 0})
 		return
 	}
 
@@ -37,15 +37,28 @@ func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	if n, ok := opts["numperpage"].(float64); ok {
 		numPerPage = int(n)
 	}
+	// The browse UI sends the search string as "text" (legacy spies used
+	// "searchtext"); accept either.
 	searchText := ""
-	if st, ok := opts["searchtext"].(string); ok {
+	if st, ok := opts["text"].(string); ok {
+		searchText = st
+	} else if st, ok := opts["searchtext"].(string); ok {
 		searchText = st
 	}
-	
-	// Query_type mapping: 1=Trend, 2=Recent
-	qt := 1
-	if q, ok := opts["querytype"].(float64); ok {
-		qt = int(q)
+
+	// The UI sends a sort string (sort: "top_rated"/"trend"/…), not a numeric
+	// query_type. Map it to Steam's IPublishedFileService query_type enum.
+	// 0=RankedByVote, 1=RankedByPublicationDate, 3=RankedByTrend, 21=LastUpdated.
+	qt := 3
+	switch s, _ := opts["sort"].(string); s {
+	case "top_rated", "most_popular":
+		qt = 0
+	case "trend", "trending":
+		qt = 3
+	case "newest", "recent", "most_recent":
+		qt = 1
+	case "updated", "last_updated":
+		qt = 21
 	}
 
 	data := url.Values{}
@@ -62,7 +75,7 @@ func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	resp, err := http.Get("https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?" + data.Encode())
 	if err != nil {
 		log.Printf("[WE] queryWorkshop error: %v", err)
-		s.sendCallback(conn, msg.Callback, []UIWallpaper{})
+		s.sendCallback(conn, msg.Callback, map[string]interface{}{"wallpapers": []UIWallpaper{}, "total": 0})
 		return
 	}
 	defer resp.Body.Close()
@@ -83,7 +96,7 @@ func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	}
 	json.Unmarshal(body, &apiRes)
 
-	var results []UIWallpaper
+	results := make([]UIWallpaper, 0)
 	for _, item := range apiRes.Response.PublishedFileDetails {
 		if item.Visibility != 0 || item.Banned != 0 {
 			continue // Only show public, unbanned items
@@ -128,7 +141,24 @@ func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 		results = append(results, w)
 	}
 
-	s.sendCallback(conn, msg.Callback, results)
+	// The browse controller's success handler (r in scripts.js) rejects the
+	// result unless e.token === i.token, falling back to an endless re-query
+	// (the "En attente d'une réponse de Steam…" spinner). Echo the request token
+	// and supply pagecount, which it feeds to updatePagination.
+	pageCount := page + 1 // assume there's a next page…
+	if len(results) < numPerPage {
+		pageCount = page // …unless this page came back short (the last one)
+	}
+	resMap := map[string]interface{}{
+		"wallpapers": results,
+		"token":      opts["token"],
+		"page":       page,
+		"pagecount":  pageCount,
+		"total":      len(results),
+		"isbackup":   false,
+	}
+
+	s.sendCallback(conn, msg.Callback, resMap)
 }
 
 func (s *WSServer) sendCallback(conn *websocket.Conn, cb string, args interface{}) {
