@@ -73,9 +73,11 @@ function updateUIState() {
 	var val = window.browseWallpapersCtrl;
 	var state = window.daemonState;
 	if (!val || !state || !state.monitors) return;
+	if (!val.applyMonitorConfigurationAndWallpaperConfig) return;
 	
-	if (!val.wallpaperConfig) val.wallpaperConfig = {};
-	if (!val.wallpaperConfig.selectedwallpapers) val.wallpaperConfig.selectedwallpapers = {};
+	var monitorsArray = [];
+	var selectedWallpapers = {};
+	var loc = 0;
 
 	for (var key in state.monitors) {
 		var m = state.monitors[key];
@@ -86,19 +88,29 @@ function updateUIState() {
 			type: m.type,
 			workshopid: m.workshop_id
 		};
-		val.wallpaperConfig.selectedwallpapers[idx] = wp;
-		if (m.device_path) val.wallpaperConfig.selectedwallpapers[m.device_path] = wp;
-		val.wallpaperConfig.selectedwallpapers[key] = wp;
+		
+		monitorsArray.push({
+			index: idx,
+			location: idx,
+			name: key,
+			x0: idx * 1920,
+			y0: 0,
+			x1: (idx + 1) * 1920,
+			y1: 1080
+		});
+		
+		selectedWallpapers[idx] = wp;
+		if (m.device_path) selectedWallpapers[m.device_path] = wp;
+		selectedWallpapers[key] = wp;
+		loc++;
 	}
 	
-	if (val.monitors && val.monitors.length > 0) {
-		val.monitors.forEach(function(monitor) {
-			var sw = val.wallpaperConfig.selectedwallpapers[monitor.location];
-			if (sw) {
-				monitor.wallpaper = sw; // Would need to find full wallpaper object ideally
-			}
-		});
-	}
+	val.applyMonitorConfigurationAndWallpaperConfig(
+		monitorsArray,
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers } },
+		{},
+		false
+	);
 	
 	try { val.$apply(); } catch(e){}
 }
