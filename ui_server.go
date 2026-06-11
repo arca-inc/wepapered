@@ -91,6 +91,15 @@ function updateUIState() {
 		return null;
 	}
 
+	if (val.getDisplayTags && !val.getDisplayTags.__wepPatched) {
+		var origGetDisplayTags = val.getDisplayTags;
+		val.getDisplayTags = function(e) {
+			if (!e || typeof e !== 'string') return [];
+			return origGetDisplayTags.call(this, e);
+		};
+		val.getDisplayTags.__wepPatched = true;
+	}
+
 	for (var key in state.monitors) {
 		var m = state.monitors[key];
 		var match = key.match(/Monitor(\d+)/);
