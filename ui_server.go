@@ -281,15 +281,16 @@ function makeProxy(impl, objectName) {
 		'Sports', 'Technology', 'Vehicle', 'Unspecified'];
 	var WEP_UTILITY = ['Audio responsive', 'Customizable', 'Puppet Warp',
 		'Media Integration', 'Video Texture', 'No Animation', 'HDR', 'User Shortcut'];
+	// Resolution tags are plain strings; the onCppInit handler maps them itself
+	// (label: e.replace(/Standard Definition/g,"SD"), value: e), so passing
+	// objects would crash on e.replace.
 	var WEP_RESOLUTIONS = ['Standard Definition', '1280 x 720', '1366 x 768',
 		'1600 x 900', '1920 x 1080', '2560 x 1440', '3840 x 2160',
 		'Ultrawide Standard Definition', 'Ultrawide 2560 x 1080', 'Ultrawide 3440 x 1440',
 		'Ultrawide 3840 x 1080', 'Portrait Standard Definition', 'Portrait 720 x 1280',
 		'Portrait 1080 x 1920', 'Portrait 1440 x 2560', 'Dual Standard Definition',
 		'Dual 7680 x 2160', 'Triple Standard Definition', 'Triple 7680 x 1440',
-		'Television', 'Other resolution', 'Dynamic resolution'].map(function (r) {
-			return { value: r, label: r };
-		});
+		'Television', 'Other resolution', 'Dynamic resolution'];
 
 	function seedTags() {
 		var u = window.utilsService;
@@ -309,7 +310,17 @@ function makeProxy(impl, objectName) {
 			if (c && Array.isArray(c.filterAllTags)) {
 				c.filterAllTags = c.filterAllTags.filter(function (t) { return t && t.value; });
 			}
-			if (c) { c.filterHideRating = true; }
+			if (c) {
+				c.filterHideRating = true;
+				// The content-rating filter group is gated behind
+				// canUseAgeRatingTags(), which only returns true for Valve's
+				// internal "steamint" build. Force it on so the Mature/
+				// Questionable ("-18") section renders for everyone.
+				c.canUseAgeRatingTags = function () { return true; };
+			}
+			if (window.utilsService) {
+				window.utilsService.canUseAgeRatingTags = function () { return true; };
+			}
 		} catch (e) {}
 		return true;
 	}
