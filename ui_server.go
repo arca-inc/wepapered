@@ -130,7 +130,7 @@ function updateUIState() {
 	
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers } },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 } },
 		{},
 		false
 	);
