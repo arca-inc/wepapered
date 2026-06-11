@@ -79,14 +79,28 @@ function updateUIState() {
 	var selectedWallpapers = {};
 	var loc = 0;
 
+	if (!val.steamWorkshopStatus) {
+		val.steamWorkshopStatus = { error: false, complete: true, hidden: true };
+	}
+
+	var list = val.wallpapers || [];
+	function findWp(file) {
+		for (var i=0; i<list.length; i++) {
+			if (list[i].file === file) return list[i];
+		}
+		return null;
+	}
+
 	for (var key in state.monitors) {
 		var m = state.monitors[key];
 		var match = key.match(/Monitor(\d+)/);
 		var idx = match ? parseInt(match[1]) : 0;
-		var wp = {
+		var wp = findWp(m.win_path) || {
 			file: m.win_path,
 			type: m.type,
-			workshopid: m.workshop_id
+			workshopid: m.workshop_id,
+			tags: "",
+			title: key
 		};
 		
 		monitorsArray.push({
