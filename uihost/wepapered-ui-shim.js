@@ -60,7 +60,11 @@
 
       if (msg.type === 'library') { library = msg.wallpapers || []; wlog('library: ' + library.length); tryPushLibrary(); return; }
       if (msg.type === 'locale') { window.__wepLocale = msg.table || {}; wlog('locale: ' + Object.keys(window.__wepLocale).length); return; }
-      if (msg.type === 'state') { return; }
+      if (msg.type === 'state') { 
+        window.daemonState = msg.state;
+        if (typeof window.updateUIState === 'function') window.updateUIState();
+        return; 
+      }
       // Bridge reply: window[method + "Callback"](...args)
       if (msg.callback && typeof window[msg.callback] === 'function') {
         try { window[msg.callback].apply(null, msg.args || []); } catch (e) {}
