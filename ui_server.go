@@ -147,10 +147,25 @@ function updateUIState() {
 
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 } },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 }, wallpaperproperties: selectedWallpapers },
 		{},
 		false
 	);
+	
+	if (val.wallpaperConfig) {
+		val.wallpaperConfig.selectedwallpapers = selectedWallpapers;
+	}
+	if (val.monitors) {
+		for (var i = 0; i < val.monitors.length; i++) {
+			var loc = val.monitors[i].location;
+			if (selectedWallpapers[loc]) {
+				val.monitors[i].wallpaper = selectedWallpapers[loc];
+			}
+		}
+	}
+	if (val.selectedMonitor && selectedWallpapers[val.selectedMonitor.location]) {
+		val.currentSelection = selectedWallpapers[val.selectedMonitor.location];
+	}
 	
 	try { val.$apply(); } catch(e){}
 }
