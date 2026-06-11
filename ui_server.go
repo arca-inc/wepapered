@@ -250,6 +250,40 @@ function makeProxy(impl, objectName) {
 	});
 }
 
+// The native WE client normally broadcasts 'onCppInit' on window.rootScope once
+// at startup. That handler is what populates the browse controller's filter tag
+// lists (D.filterAllTags / filterCategoryTags, from static getAvailableTags()).
+// Hosted, nothing fires it, so the Workshop tab crashes in xa() on
+// filterAllTags.length. Re-assert it whenever a (browse) controller becomes
+// active: poll for rootScope, broadcast once, then re-broadcast ~150ms after
+// every route change (mirroring WE's own i(c,100) post-route init delay so the
+// controller has registered its $on('onCppInit') before we fire).
+(function () {
+	function fireCppInit() {
+		if (!window.rootScope) return false;
+		try { window.rootScope.$broadcast('onCppInit'); } catch (e) {}
+		// getAvailableTags() (genre list) is fed by the native-only setAvailableTags,
+		// so hosted it's empty and the handler leaves a bogus {value:undefined} entry
+		// in filterAllTags. Drop it so the genre filter row / translateTag don't choke.
+		try {
+			var c = window.browseWallpapersCtrl;
+			if (c && Array.isArray(c.filterAllTags)) {
+				c.filterAllTags = c.filterAllTags.filter(function (t) { return t && t.value; });
+			}
+		} catch (e) {}
+		return true;
+	}
+	var iv = setInterval(function () {
+		if (!fireCppInit()) return;
+		clearInterval(iv);
+		try {
+			window.rootScope.$on('$routeChangeSuccess', function () {
+				setTimeout(fireCppInit, 150);
+			});
+		} catch (e) {}
+	}, 100);
+})();
+
 try { Object.defineProperty(window, 'global', { value: makeProxy(globalImpl, 'global'), writable: true, configurable: true }); } catch (e) { window.global = makeProxy(globalImpl, 'global'); }
 try { Object.defineProperty(window, 'ui', { value: makeProxy(uiImpl, 'ui'), writable: true, configurable: true }); } catch (e) { window.ui = makeProxy(uiImpl, 'ui'); }
 
