@@ -327,12 +327,43 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 // freshly connected client. Used by the hosted-UI mode (CEF window / probe).
 func (s *WSServer) sendHostedUIData(conn *websocket.Conn) {
 	lib := enumerateLibrary(s.cfg.WEPath)
-	if data, err := json.Marshal(map[string]interface{}{
-		"type":       "library",
-		"wallpapers": lib,
-	}); err == nil {
-		conn.WriteMessage(websocket.TextMessage, data)
+	
+	sendLibrary := func(library []UIWallpaper) {
+		if data, err := json.Marshal(map[string]interface{}{
+			"type":       "library",
+			"wallpapers": library,
+		}); err == nil {
+			s.mu.Lock()
+			if _, ok := s.clients[conn]; ok {
+				conn.WriteMessage(websocket.TextMessage, data)
+			}
+			s.mu.Unlock()
+		}
 	}
+	
+	sendLibrary(lib)
+
+	go func() {
+		var ids []string
+		for _, w := range lib {
+			if w.WorkshopID != "" && w.WorkshopID != w.Title {
+				ids = append(ids, w.WorkshopID)
+			}
+		}
+		
+		authors := fetchAuthors(ids)
+		updated := false
+		for i, w := range lib {
+			if author, ok := authors[w.WorkshopID]; ok {
+				lib[i].Author = author
+				updated = true
+			}
+		}
+		
+		if updated {
+			sendLibrary(lib)
+		}
+	}()
 
 	locale := loadLocale(s.cfg.WEPath, "en-us")
 	if len(locale) > 0 {

@@ -24,6 +24,7 @@ type UIWallpaper struct {
 	Status        string   `json:"status"` // "installed"
 	Local         bool     `json:"local"`  // true for myprojects, false for workshop items
 	Approved      bool     `json:"approved"`
+	Author        string   `json:"author"`
 }
 
 // enumerateLibrary scans the installed Wallpaper Engine content and returns the
