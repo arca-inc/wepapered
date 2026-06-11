@@ -186,11 +186,12 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 			}
 		}
 
-		// The browse UI treats any status other than "unsubscribed" as already
-		// subscribed (it checks status === "unsubscribed"). Our old "notinstalled"
-		// made every workshop item look subscribed. Report "installed" only when
-		// the item is actually present locally, "unsubscribed" otherwise.
-		status := "unsubscribed"
+		// The wallpaper tile only renders an action for status "installed" or
+		// "downloadable" (any other value, like the old "notinstalled", shows no
+		// subscribe/download button so the item looks already owned). A workshop
+		// item we don't have locally is "downloadable"; one present on disk is
+		// "installed".
+		status := "downloadable"
 		if isWorkshopInstalled(s.cfg.WEPath, item.PublishedFileID) {
 			status = "installed"
 		}
