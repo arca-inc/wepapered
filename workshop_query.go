@@ -7,11 +7,40 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// toStringSlice coerces a JSON array (from the bridge) into a []string, dropping
+// non-string and empty entries.
+func toStringSlice(v interface{}) []string {
+	arr, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, e := range arr {
+		if s, ok := e.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// isWorkshopInstalled reports whether a subscribed workshop item is present on
+// disk (…/steamapps/workshop/content/431960/<id>/).
+func isWorkshopInstalled(wePath, id string) bool {
+	if wePath == "" || id == "" {
+		return false
+	}
+	steamapps := filepath.Dir(filepath.Dir(wePath))
+	_, err := os.Stat(filepath.Join(steamapps, "workshop", "content", "431960", id))
+	return err == nil
+}
 
 // handleQueryWorkshop debounces incoming Workshop queries. The browse UI fires
 // queryWorkshop in bursts (tab switch, filter init, and — fatally — on every
@@ -99,6 +128,23 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	data.Set("return_details", "1")
 	data.Set("return_metadata", "1")
 
+	// Forward the UI's tag filters to Steam. The browse panel encodes every
+	// filter (genre, type, category, resolution and the content rating, i.e. the
+	// Everyone/Questionable/Mature "-18" toggle) as required/excluded tags; an
+	// unchecked rating ends up in excludedTags, so simply relaying them makes the
+	// whole filter panel — including showing mature content — work.
+	reqTags := toStringSlice(opts["requiredTags"])
+	excTags := toStringSlice(opts["excludedTags"])
+	for i, t := range reqTags {
+		data.Set(fmt.Sprintf("requiredtags[%d]", i), t)
+	}
+	for i, t := range excTags {
+		data.Set(fmt.Sprintf("excludedtags[%d]", i), t)
+	}
+	if len(reqTags) > 0 {
+		data.Set("match_all_tags", "1")
+	}
+
 	resp, err := http.Get("https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/?" + data.Encode())
 	if err != nil {
 		log.Printf("[WE] queryWorkshop error: %v", err)
@@ -140,6 +186,15 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 			}
 		}
 
+		// The browse UI treats any status other than "unsubscribed" as already
+		// subscribed (it checks status === "unsubscribed"). Our old "notinstalled"
+		// made every workshop item look subscribed. Report "installed" only when
+		// the item is actually present locally, "unsubscribed" otherwise.
+		status := "unsubscribed"
+		if isWorkshopInstalled(s.cfg.WEPath, item.PublishedFileID) {
+			status = "installed"
+		}
+
 		w := UIWallpaper{
 			File:         item.PublishedFileID,
 			Title:        item.Title,
@@ -149,7 +204,7 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 			WorkshopID:   item.PublishedFileID,
 			ItemID:       item.PublishedFileID,
 			Tags:         tags,
-			Status:       "notinstalled",
+			Status:       status,
 			Local:        false,
 			Approved:     false,
 		}
