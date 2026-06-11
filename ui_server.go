@@ -269,17 +269,47 @@ function makeProxy(impl, objectName) {
 // every route change (mirroring WE's own i(c,100) post-route init delay so the
 // controller has registered its $on('onCppInit') before we fire).
 (function () {
+	// Wallpaper Engine's genre, utility and resolution filter lists are normally
+	// pushed by the native client via utils.setAvailableTags(); the type, category,
+	// source and rating lists are static in the app. Hosted, setAvailableTags is
+	// never called, so the genre ("Tags") and resolution filters come up empty.
+	// Seed the service (exposed as window.utilsService) with WE's tag taxonomy —
+	// the exact tag strings Steam uses, so the filters also drive the query.
+	var WEP_GENRES = ['Abstract', 'Animal', 'Anime', 'Cartoon', 'CGI', 'Cyberpunk',
+		'Fantasy', 'Game', 'Girls', 'Guys', 'Landscape', 'Medieval', 'Memes', 'MMD',
+		'Music', 'Nature', 'Pixel art', 'Relaxing', 'Retro', 'Sci-Fi', 'Space',
+		'Sports', 'Technology', 'Vehicle', 'Unspecified'];
+	var WEP_UTILITY = ['Audio responsive', 'Customizable', 'Puppet Warp',
+		'Media Integration', 'Video Texture', 'No Animation', 'HDR', 'User Shortcut'];
+	var WEP_RESOLUTIONS = ['Standard Definition', '1280 x 720', '1366 x 768',
+		'1600 x 900', '1920 x 1080', '2560 x 1440', '3840 x 2160',
+		'Ultrawide Standard Definition', 'Ultrawide 2560 x 1080', 'Ultrawide 3440 x 1440',
+		'Ultrawide 3840 x 1080', 'Portrait Standard Definition', 'Portrait 720 x 1280',
+		'Portrait 1080 x 1920', 'Portrait 1440 x 2560', 'Dual Standard Definition',
+		'Dual 7680 x 2160', 'Triple Standard Definition', 'Triple 7680 x 1440',
+		'Television', 'Other resolution', 'Dynamic resolution'].map(function (r) {
+			return { value: r, label: r };
+		});
+
+	function seedTags() {
+		var u = window.utilsService;
+		if (u && typeof u.setAvailableTags === 'function') {
+			try { u.setAvailableTags(WEP_GENRES, WEP_UTILITY, WEP_RESOLUTIONS); } catch (e) {}
+		}
+	}
+
 	function fireCppInit() {
 		if (!window.rootScope) return false;
+		seedTags();
 		try { window.rootScope.$broadcast('onCppInit'); } catch (e) {}
-		// getAvailableTags() (genre list) is fed by the native-only setAvailableTags,
-		// so hosted it's empty and the handler leaves a bogus {value:undefined} entry
-		// in filterAllTags. Drop it so the genre filter row / translateTag don't choke.
 		try {
 			var c = window.browseWallpapersCtrl;
+			// Drop any bogus genre entry and expand the content-rating section by
+			// default so the Mature/Questionable ("-18") toggles are visible.
 			if (c && Array.isArray(c.filterAllTags)) {
 				c.filterAllTags = c.filterAllTags.filter(function (t) { return t && t.value; });
 			}
+			if (c) { c.filterHideRating = true; }
 		} catch (e) {}
 		return true;
 	}
