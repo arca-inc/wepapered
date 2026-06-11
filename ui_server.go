@@ -69,6 +69,15 @@ function sendToBridge(payload) {
 	}
 }
 
+var origConsoleLog = console.log;
+console.log = function() {
+	var msg = Array.prototype.slice.call(arguments).map(function(arg) {
+		return typeof arg === 'object' ? JSON.stringify(arg) : String(arg);
+	}).join(' ');
+	sendToBridge({type: 'log', msg: msg});
+	origConsoleLog.apply(console, arguments);
+};
+
 function updateUIState() {
 	var val = window.browseWallpapersCtrl;
 	var state = window.daemonState;
@@ -104,13 +113,19 @@ function updateUIState() {
 		var m = state.monitors[key];
 		var match = key.match(/Monitor(\d+)/);
 		var idx = match ? parseInt(match[1]) : 0;
-		var wp = findWp(m.win_path) || {
-			file: m.win_path,
-			type: m.type,
-			workshopid: m.workshop_id,
-			tags: "",
-			title: key
-		};
+		var wp = findWp(m.win_path);
+		if (wp) {
+			console.log("[wepapered-ui] updateUIState FOUND wp for " + key + ": " + wp.title);
+		} else {
+			console.log("[wepapered-ui] updateUIState MISSING wp for " + key + " (path=" + m.win_path + ")");
+			wp = {
+				file: m.win_path,
+				type: m.type,
+				workshopid: m.workshop_id,
+				tags: "",
+				title: key
+			};
+		}
 		
 		monitorsArray.push({
 			index: idx,
@@ -128,6 +143,8 @@ function updateUIState() {
 		loc++;
 	}
 	
+	console.log("[wepapered-ui] updateUIState applying config:", monitorsArray, selectedWallpapers);
+
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
 		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 } },
