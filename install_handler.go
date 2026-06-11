@@ -39,6 +39,7 @@ func (s *WSServer) handleUI(conn *websocket.Conn, msg WEMessage) {
 					pct = float64(down) * 100 / float64(total)
 					label = fmt.Sprintf("%.0f%%", pct)
 				}
+				log.Printf("[steam-ugc] progress %s %.0f%% (%d/%d)", id, pct, down, total)
 				s.Broadcast(map[string]interface{}{
 					"type": "wsprogress", "workshopid": id,
 					"status": "downloading", "percent": pct, "label": label,

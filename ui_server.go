@@ -217,10 +217,13 @@ function findWpByWorkshopId(id) {
 	}
 	return null;
 }
+window.__wsLastStatus = window.__wsLastStatus || {};
 function applyWorkshopProgress(msg) {
 	var wp = findWpByWorkshopId(msg.workshopid);
 	if (!wp) return;
-	if (msg.status === 'installed') {
+	var c = window.browseWallpapersCtrl;
+	var newStatus = (msg.status === 'installed') ? 'installed' : 'downloading';
+	if (newStatus === 'installed') {
 		wp.status = 'installed';
 		wp.downloadpercent = 100;
 		wp.downloadlabel = '';
@@ -229,8 +232,17 @@ function applyWorkshopProgress(msg) {
 		if (typeof msg.percent === 'number') wp.downloadpercent = msg.percent;
 		wp.downloadlabel = msg.label || '';
 	}
-	var c = window.browseWallpapersCtrl;
+	// The virtualised grid only rebuilds a tile (and creates/destroys its
+	// download ring) when its sortedWallpapers array reference changes — WE's own
+	// refresh trick. Reassign a sliced copy on status transitions; intermediate
+	// percent updates flow into the existing ring via its rpPercent watch on a
+	// plain digest.
+	var changed = window.__wsLastStatus[msg.workshopid] !== newStatus;
+	window.__wsLastStatus[msg.workshopid] = newStatus;
 	try {
+		if (changed && Array.isArray(c.sortedWallpapers)) {
+			c.sortedWallpapers = c.sortedWallpapers.slice();
+		}
 		if (c.$$phase || (c.$root && c.$root.$$phase)) { c.$evalAsync(function(){}); }
 		else { c.$apply(); }
 	} catch (e) {}
