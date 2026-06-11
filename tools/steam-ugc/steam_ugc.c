@@ -3,8 +3,9 @@
 // exported by libsteam_api.so (no SDK headers needed). Steam downloads the item
 // into …/steamapps/workshop/content/431960/<id>/, where wepapered already looks.
 //
-//   wepapered-steam-ugc            → connectivity check (prints subscribed count)
-//   wepapered-steam-ugc <id> [...] → subscribe + download each id, wait for install
+//   wepapered-steam-ugc                       → connectivity check (subscribed count)
+//   wepapered-steam-ugc <id> [...]            → subscribe + download, wait for install
+//   wepapered-steam-ugc --unsubscribe <id>... → unsubscribe (Steam removes the files)
 //
 // Requires: Steam running and logged in, the account owning app 431960, and
 // ~/.steam/sdk64/steamclient.so present.
@@ -24,6 +25,7 @@ extern void  SteamAPI_Shutdown(void);
 extern void  SteamAPI_RunCallbacks(void);
 extern void *SteamAPI_SteamUGC_v021(void);
 extern SteamAPICall_t SteamAPI_ISteamUGC_SubscribeItem(void *self, PublishedFileId_t id);
+extern SteamAPICall_t SteamAPI_ISteamUGC_UnsubscribeItem(void *self, PublishedFileId_t id);
 extern bool     SteamAPI_ISteamUGC_DownloadItem(void *self, PublishedFileId_t id, bool bHighPriority);
 extern uint32_t SteamAPI_ISteamUGC_GetItemState(void *self, PublishedFileId_t id);
 extern bool     SteamAPI_ISteamUGC_GetItemDownloadInfo(void *self, PublishedFileId_t id,
@@ -55,6 +57,22 @@ int main(int argc, char **argv) {
         printf("OK: connected, %u subscribed items\n", SteamAPI_ISteamUGC_GetNumSubscribedItems(ugc));
         SteamAPI_Shutdown();
         return 0;
+    }
+
+    // Unsubscribe mode: --unsubscribe <id>... — Steam removes the local files.
+    if (strcmp(argv[1], "--unsubscribe") == 0) {
+        int rc = 0;
+        for (int a = 2; a < argc; a++) {
+            PublishedFileId_t id = strtoull(argv[a], NULL, 10);
+            if (!id) { fprintf(stderr, "bad id %s\n", argv[a]); rc = 2; continue; }
+            SteamAPI_ISteamUGC_UnsubscribeItem(ugc, id);
+            printf("unsubscribed %llu\n", (unsigned long long)id);
+            fflush(stdout);
+        }
+        // Let the unsubscribe calls flush to the client.
+        for (int i = 0; i < 25; i++) { SteamAPI_RunCallbacks(); usleep(100000); }
+        SteamAPI_Shutdown();
+        return rc;
     }
 
     int rc = 0;

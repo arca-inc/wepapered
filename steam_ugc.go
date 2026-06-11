@@ -63,3 +63,42 @@ func steamSubscribeDownload(ids []string, onProgress func(id string, down, total
 	}()
 	return true
 }
+
+// steamUnsubscribe asks the Steam client to unsubscribe from the given workshop
+// ids (ISteamUGC::UnsubscribeItem); Steam removes the local files. Runs the
+// helper asynchronously, calling onDone for each id. Returns false if the helper
+// isn't available.
+func steamUnsubscribe(ids []string, onDone func(id string)) bool {
+	if len(ids) == 0 {
+		return true
+	}
+	if _, err := os.Stat(steamUGCBin); err != nil {
+		return false
+	}
+	args := append([]string{"--unsubscribe"}, ids...)
+	cmd := exec.Command(steamUGCBin, args...)
+	cmd.Stderr = os.Stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return false
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("[steam-ugc] unsubscribe start failed: %v", err)
+		return false
+	}
+	log.Printf("[steam-ugc] unsubscribing %v", ids)
+	go func() {
+		sc := bufio.NewScanner(stdout)
+		for sc.Scan() {
+			f := strings.Fields(strings.TrimSpace(sc.Text()))
+			if len(f) == 2 && f[0] == "unsubscribed" {
+				log.Printf("[steam-ugc] unsubscribed %s", f[1])
+				if onDone != nil {
+					onDone(f[1])
+				}
+			}
+		}
+		cmd.Wait()
+	}()
+	return true
+}

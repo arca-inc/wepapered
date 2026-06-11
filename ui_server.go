@@ -222,10 +222,15 @@ function applyWorkshopProgress(msg) {
 	var wp = findWpByWorkshopId(msg.workshopid);
 	if (!wp) return;
 	var c = window.browseWallpapersCtrl;
-	var newStatus = (msg.status === 'installed') ? 'installed' : 'downloading';
+	var newStatus = msg.status === 'installed' ? 'installed'
+		: msg.status === 'downloadable' ? 'downloadable' : 'downloading';
 	if (newStatus === 'installed') {
 		wp.status = 'installed';
 		wp.downloadpercent = 100;
+		wp.downloadlabel = '';
+	} else if (newStatus === 'downloadable') {
+		wp.status = 'downloadable';
+		wp.downloadpercent = 0;
 		wp.downloadlabel = '';
 	} else {
 		wp.status = 'downloading';

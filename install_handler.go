@@ -60,6 +60,18 @@ func (s *WSServer) handleUI(conn *websocket.Conn, msg WEMessage) {
 		}
 		// Resolve the caller's promise (callDeferred waits on <method>Callback).
 		s.sendCallback(conn, msg.Method+"Callback", nil)
+
+	case "unsubscribeWorkshopItem":
+		ids := collectWorkshopIDs(msg.Args)
+		log.Printf("[WE] unsubscribeWorkshopItem %v", ids)
+		steamUnsubscribe(ids, func(id string) {
+			s.Broadcast(map[string]interface{}{
+				"type": "wsprogress", "workshopid": id,
+				"status": "downloadable", "percent": 0.0, "label": "",
+			})
+		})
+		s.sendCallback(conn, msg.Method+"Callback", nil)
+
 	default:
 		log.Printf("[WE] ui.%s", msg.Method)
 	}
