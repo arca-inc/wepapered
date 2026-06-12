@@ -165,7 +165,7 @@ function updateUIState() {
 
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 } },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 }, browser: { advertiseworkshop: false, advertiseexplore: false, advertisesendtomobile: false, defaultfilterconfig: { Anime: false } } },
 		{},
 		false
 	);	
@@ -458,11 +458,11 @@ BRIDGE_OBJECTS.forEach(function(name) {
 });
 
 </script>
-<style>
-/* Hide the tutorial overlay ("Click here to browse workshop", etc.) */
-help-overlay { display: none !important; }
-.popover { display: none !important; }
-</style>`
+		<style>
+			help-overlay, .ui-tutorial, [class*="tutorial"], .welcome-screen { display: none !important; }
+			.popover, .tooltip { display: none !important; opacity: 0 !important; }
+			[translate^="ui_browse_advertise"] { display: none !important; }
+		</style>`
 		
 		injected := bytes.Replace(content, []byte("<head>"), []byte("<head>"+shim), 1)
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")

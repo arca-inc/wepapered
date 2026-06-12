@@ -69,7 +69,7 @@ func upgradeMonitorWallpaper(mw *MonitorWallpaper) {
 		}
 		depDir := filepath.Join(filepath.Dir(dir), meta.Dependency)
 		if depMeta := readProjectMeta(filepath.Join(depDir, "project.json")); depMeta != nil && depMeta.Type != "" {
-			mw.Type = depMeta.Type
+			mw.Type = strings.ToLower(depMeta.Type)
 			mw.RenderDir = depDir
 		}
 	}
@@ -132,6 +132,7 @@ func readProjectMeta(linuxPath string) *ProjectJSON {
 	if p.Type == "" {
 		p.Type = inferTypeFromDir(dir)
 	}
+	p.Type = p.Type
 	return &p
 }
 

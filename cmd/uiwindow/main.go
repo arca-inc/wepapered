@@ -101,7 +101,7 @@ func main() {
 	os.Unsetenv("WAYLAND_DISPLAY")
 	os.Setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
 
-	url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default#/browsewallpapers"
+	url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default&cb=1#/browsewallpapers"
 	if len(os.Args) > 1 {
 		url = os.Args[1]
 	}
