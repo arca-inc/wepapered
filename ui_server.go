@@ -96,6 +96,7 @@ function updateUIState() {
 	
 	var monitorsArray = [];
 	var selectedWallpapers = {};
+	var wallpaperProperties = {};
 	var loc = 0;
 
 	if (!val.steamWorkshopStatus) {
@@ -150,6 +151,11 @@ function updateUIState() {
 		selectedWallpapers[idx] = wp;
 		if (m.device_path) selectedWallpapers[m.device_path] = wp;
 		selectedWallpapers[key] = wp;
+		
+		var props = m.props || {};
+		wallpaperProperties[idx] = props;
+		if (m.device_path) wallpaperProperties[m.device_path] = props;
+		wallpaperProperties[key] = props;
 		loc++;
 	}
 	
@@ -157,7 +163,7 @@ function updateUIState() {
 
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 }, wallpaperproperties: selectedWallpapers },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 }, wallpaperproperties: wallpaperProperties },
 		{},
 		false
 	);
@@ -298,14 +304,14 @@ var uiImpl = {
 	systemLog: function() {},
 	openLink: function(url) {},
 	close: function() { 
-		if (window.webkit && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("close"); 
+		if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("close"); 
 		else window.close(); 
 	},
 	minimize: function() {
-		if (window.webkit && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("minimize");
+		if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("minimize");
 	},
 	maximize: function() {
-		if (window.webkit && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("maximize");
+		if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("maximize");
 	}
 };
 
@@ -450,7 +456,11 @@ BRIDGE_OBJECTS.forEach(function(name) {
 	} catch(e){}
 });
 
-</script>`
+</script>
+<style>
+/* Hide the tutorial overlay ("Click here to browse workshop", etc.) */
+help-overlay { display: none !important; }
+</style>`
 		
 		injected := bytes.Replace(content, []byte("<head>"), []byte("<head>"+shim), 1)
 		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")

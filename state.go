@@ -112,6 +112,8 @@ type ProjectJSON struct {
 	ContentRating string                 `json:"contentrating"` // e.g. "Everyone", "Questionable", "Mature"
 	Tags          []string               `json:"tags"`
 	WorkshopID    string                 `json:"workshopid"`
+	General       map[string]interface{} `json:"general"`
+	Properties    map[string]interface{} `json:"properties"`
 }
 
 func readProjectMeta(linuxPath string) *ProjectJSON {
