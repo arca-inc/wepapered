@@ -4,7 +4,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 
 	"fyne.io/systray"
 )
@@ -52,21 +51,13 @@ func (t *TrayManager) onReady() {
 }
 
 func (t *TrayManager) openWEBrowser() {
-	exe, _ := os.Executable()
-	exePath := filepath.Join(filepath.Dir(exe), "lwe", "build", "output", "linux-wallpaperengine")
-	if lweOutput := os.Getenv("LWE_OUTPUT_DIR"); lweOutput != "" {
-		exePath = filepath.Join(lweOutput, "linux-wallpaperengine")
-	}
-	
 	url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default#/browsewallpapers"
-	
-	cmd := exec.Command(exePath, "--ui-window=" + url)
+	cmd := exec.Command("xdg-open", url)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		log.Printf("[wepapered] Failed to start WE browser: %v", err)
+		log.Printf("[wepapered] Failed to open WE browser UI: %v", err)
 	} else {
-		// Launching async so we don't block the tray
 		go cmd.Wait()
 	}
 }
