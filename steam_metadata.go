@@ -80,7 +80,3 @@ func fetchCreatorName(creatorID string) string {
 	}
 	return profile.SteamID
 }
-
-func (s *WSServer) enrichLibraryWithAuthors(conn interface{}) {
-	// Not implemented directly yet, just a helper file
-}
