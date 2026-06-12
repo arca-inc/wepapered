@@ -45,6 +45,10 @@ func (s *WSServer) serveUI(w http.ResponseWriter, r *http.Request) {
 	if len(locale) == 0 {
 		locale = loadLocale(s.cfg.WEPath, "en-us")
 	}
+	
+	// Override the main title
+	locale["ui_caption_browse"] = "Wepapered - Made for gamers"
+	
 	localeJSON, _ := json.Marshal(locale)
 
 	shim := `<script>
@@ -96,7 +100,6 @@ function updateUIState() {
 	
 	var monitorsArray = [];
 	var selectedWallpapers = {};
-	var wallpaperProperties = {};
 	var loc = 0;
 
 	if (!val.steamWorkshopStatus) {
@@ -138,6 +141,10 @@ function updateUIState() {
 			};
 		}
 		
+		var wpClone = Object.assign({}, wp);
+		wpClone.properties = {};
+		wpClone.properties[key] = m.props || {};
+		
 		monitorsArray.push({
 			index: idx,
 			location: idx,
@@ -148,14 +155,9 @@ function updateUIState() {
 			y1: 1080
 		});
 		
-		selectedWallpapers[idx] = wp;
-		if (m.device_path) selectedWallpapers[m.device_path] = wp;
-		selectedWallpapers[key] = wp;
-		
-		var props = m.props || {};
-		wallpaperProperties[idx] = props;
-		if (m.device_path) wallpaperProperties[m.device_path] = props;
-		wallpaperProperties[key] = props;
+		selectedWallpapers[idx] = wpClone;
+		if (m.device_path) selectedWallpapers[m.device_path] = wpClone;
+		selectedWallpapers[key] = wpClone;
 		loc++;
 	}
 	
@@ -163,11 +165,10 @@ function updateUIState() {
 
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 }, wallpaperproperties: wallpaperProperties },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 } },
 		{},
 		false
-	);
-	
+	);	
 	if (val.wallpaperConfig) {
 		val.wallpaperConfig.selectedwallpapers = selectedWallpapers;
 	}
@@ -460,6 +461,7 @@ BRIDGE_OBJECTS.forEach(function(name) {
 <style>
 /* Hide the tutorial overlay ("Click here to browse workshop", etc.) */
 help-overlay { display: none !important; }
+.popover { display: none !important; }
 </style>`
 		
 		injected := bytes.Replace(content, []byte("<head>"), []byte("<head>"+shim), 1)
