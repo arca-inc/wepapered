@@ -296,8 +296,34 @@ var uiImpl = {
 	getLanguage: function() { return navigator.language.toLowerCase() || 'en-us'; },
 	getLocales: function() { return JSON.stringify(window.__wepLocale); },
 	systemLog: function() {},
-	openLink: function(url) {}
+	openLink: function(url) {},
+	close: function() { 
+		if (window.webkit && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("close"); 
+		else window.close(); 
+	},
+	minimize: function() {
+		if (window.webkit && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("minimize");
+	},
+	maximize: function() {
+		if (window.webkit && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage("maximize");
+	}
 };
+
+window.addEventListener('mousedown', function(e) {
+	if (e.button !== 0) return;
+	var t = e.target;
+	while (t && t !== document.body) {
+		if (t.tagName === 'BUTTON' || (t.classList && t.classList.contains('titlebarBtn'))) return;
+		if (t.classList && t.classList.contains('titlebar')) {
+			if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.host) {
+				window.webkit.messageHandlers.host.postMessage("drag");
+				e.preventDefault();
+			}
+			return;
+		}
+		t = t.parentNode;
+	}
+});
 
 function makeProxy(impl, objectName) {
 	return new Proxy(impl, {

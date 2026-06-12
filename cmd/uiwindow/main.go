@@ -14,12 +14,42 @@ static void on_destroy(GtkWidget *w, gpointer d) { gtk_main_quit(); }
 
 static void load_changed(WebKitWebView *wv, WebKitLoadEvent ev, gpointer d) {
     if (ev == WEBKIT_LOAD_FINISHED) {
-        // Ensure the window gets focus after page load
         gtk_window_present(GTK_WINDOW(d));
     }
 }
 
+static void on_script_message(WebKitUserContentManager *m, WebKitJavascriptResult *r, gpointer p) {
+    GtkWindow *win = GTK_WINDOW(p);
+    JSCValue *value = webkit_javascript_result_get_js_value(r);
+    char *str = jsc_value_to_string(value);
+    
+    if (g_strcmp0(str, "minimize") == 0) {
+        gtk_window_iconify(win);
+    } else if (g_strcmp0(str, "maximize") == 0) {
+        if (gtk_window_is_maximized(win)) {
+            gtk_window_unmaximize(win);
+        } else {
+            gtk_window_maximize(win);
+        }
+    } else if (g_strcmp0(str, "drag") == 0) {
+        GdkDisplay *display = gtk_widget_get_display(GTK_WIDGET(win));
+        GdkSeat *seat = gdk_display_get_default_seat(display);
+        GdkDevice *pointer = gdk_seat_get_pointer(seat);
+        int x, y;
+        gdk_device_get_position(pointer, NULL, &x, &y);
+        gtk_window_begin_move_drag(win, 1, x, y, GDK_CURRENT_TIME);
+    } else if (g_strcmp0(str, "close") == 0) {
+        gtk_window_close(win);
+    }
+    
+    g_free(str);
+}
+
 void run_ui_window(const char *url, int width, int height) {
+    // Force X11/XWayland backend — WebKitWebProcess crashes on raw Wayland
+    // sockets due to a protocol error (EPROTO/71) with webkit2gtk-4.1.
+    g_setenv("GDK_BACKEND", "x11", TRUE);
+
     gtk_init(0, NULL);
 
     GtkWidget *win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
@@ -30,16 +60,21 @@ void run_ui_window(const char *url, int width, int height) {
     // No native title bar decorations — the WE UI draws its own top bar
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
 
-    WebKitWebView *wv = WEBKIT_WEB_VIEW(webkit_web_view_new());
+    WebKitUserContentManager *ucm = webkit_user_content_manager_new();
+    webkit_user_content_manager_register_script_message_handler(ucm, "host");
+    
+    WebKitWebView *wv = WEBKIT_WEB_VIEW(webkit_web_view_new_with_user_content_manager(ucm));
+    g_signal_connect(ucm, "script-message-received::host", G_CALLBACK(on_script_message), win);
 
-    // Allow running local files and cross-origin requests to localhost
     WebKitSettings *settings = webkit_web_view_get_settings(wv);
     webkit_settings_set_allow_file_access_from_file_urls(settings, TRUE);
     webkit_settings_set_allow_universal_access_from_file_urls(settings, TRUE);
     webkit_settings_set_javascript_can_access_clipboard(settings, TRUE);
     webkit_settings_set_enable_developer_extras(settings, FALSE);
-    // Disable context menu for app-like feel
-    webkit_settings_set_enable_caret_browsing(settings, FALSE);
+    // Disable GPU/GBM hardware acceleration — avoids "Failed to create GBM
+    // buffer" errors when running under XWayland without DRM access.
+    webkit_settings_set_hardware_acceleration_policy(
+        settings, WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
 
     gtk_container_add(GTK_CONTAINER(win), GTK_WIDGET(wv));
 
@@ -59,6 +94,13 @@ import (
 )
 
 func main() {
+	// Force XWayland/X11 backend before GTK or WebKit touch the environment.
+	// WebKitWebProcess is a subprocess that inherits our env — if WAYLAND_DISPLAY
+	// is set and GDK_BACKEND isn't forced, the web process crashes with EPROTO/71.
+	os.Setenv("GDK_BACKEND", "x11")
+	os.Unsetenv("WAYLAND_DISPLAY")
+	os.Setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
+
 	url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default#/browsewallpapers"
 	if len(os.Args) > 1 {
 		url = os.Args[1]
