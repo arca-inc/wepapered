@@ -738,9 +738,11 @@ func bgDirFromLinuxPath(p string) string {
 }
 
 type hyprOutput struct {
-	Name string `json:"name"`
-	X    int    `json:"x"`
-	Y    int    `json:"y"`
+	Name   string `json:"name"`
+	X      int    `json:"x"`
+	Y      int    `json:"y"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 func hyprlandOutputs() ([]hyprOutput, error) {
@@ -764,16 +766,18 @@ func hyprlandOutputs() ([]hyprOutput, error) {
 		return nil, err
 	}
 	var raw []struct {
-		Name string `json:"name"`
-		X    int    `json:"x"`
-		Y    int    `json:"y"`
+		Name   string `json:"name"`
+		X      int    `json:"x"`
+		Y      int    `json:"y"`
+		Width  int    `json:"width"`
+		Height int    `json:"height"`
 	}
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, err
 	}
 	result := make([]hyprOutput, 0, len(raw))
 	for _, m := range raw {
-		result = append(result, hyprOutput{Name: m.Name, X: m.X, Y: m.Y})
+		result = append(result, hyprOutput{Name: m.Name, X: m.X, Y: m.Y, Width: m.Width, Height: m.Height})
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].X != result[j].X {

@@ -169,33 +169,58 @@ func (s *WSServer) dispatch(conn *websocket.Conn, msg WEMessage) {
 
 func (s *WSServer) handleCallbackMessage(conn *websocket.Conn, msg WEMessage) {
 	log.Printf("[WE←C++] Object=%s Method=%s callback=%s", msg.Object, msg.Method, msg.Callback)
-	
-	// Try to reply to getMonitors if it asks
+
 	if msg.Object == "browseWallpaperObject" && (msg.Method == "getMonitors" || msg.Method == "getDisplays") {
 		var monitorsArray []map[string]interface{}
-		loc := 0
-		for label := range s.state.Monitors {
-			idx := loc
-			fmt.Sscanf(label, "Monitor%d", &idx)
-			monitorsArray = append(monitorsArray, map[string]interface{}{
-				"index":      idx,
-				"location":   idx,
-				"name":       label,
-				"devicePath": label,
-				"deviceName": label,
-				"isClone":    false,
-				"isInGroup":  false,
-				"x0":         idx * 1920,
-				"y0":         0,
-				"x1":         (idx + 1) * 1920,
-				"y1":         1080,
-			})
-			loc++
+
+		// Use real Hyprland output geometry when available.
+		outputs, err := hyprlandOutputs()
+		if err == nil && len(outputs) > 0 {
+			for idx, o := range outputs {
+				label := fmt.Sprintf("Monitor%d", idx)
+				w, h := o.Width, o.Height
+				if w == 0 { w = 1920 }
+				if h == 0 { h = 1080 }
+				monitorsArray = append(monitorsArray, map[string]interface{}{
+					"index":      idx,
+					"location":   idx,
+					"name":       label,
+					"devicePath": label,
+					"deviceName": o.Name,
+					"isClone":    false,
+					"isInGroup":  false,
+					"x0":         o.X,
+					"y0":         o.Y,
+					"x1":         o.X + w,
+					"y1":         o.Y + h,
+				})
+			}
+		} else {
+			// Fallback: build from saved state labels.
+			loc := 0
+			for label := range s.state.Monitors {
+				idx := loc
+				fmt.Sscanf(label, "Monitor%d", &idx)
+				monitorsArray = append(monitorsArray, map[string]interface{}{
+					"index":      idx,
+					"location":   idx,
+					"name":       label,
+					"devicePath": label,
+					"deviceName": label,
+					"isClone":    false,
+					"isInGroup":  false,
+					"x0":         idx * 1920,
+					"y0":         0,
+					"x1":         (idx + 1) * 1920,
+					"y1":         1080,
+				})
+				loc++
+			}
 		}
-		
+
 		reply, _ := json.Marshal(map[string]interface{}{
 			"callback": msg.Callback,
-			"args": []interface{}{ monitorsArray },
+			"args":     []interface{}{monitorsArray},
 		})
 		conn.WriteMessage(websocket.TextMessage, reply)
 	}
