@@ -2,7 +2,7 @@ package main
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/lwe/src
-#cgo LDFLAGS: -L${SRCDIR}/lwe/build/output -llinux-wallpaperengine-lib -Wl,-rpath,${SRCDIR}/lwe/build/output
+#cgo LDFLAGS: -L${SRCDIR}/lwe/build/output -llinux-wallpaperengine-lib -Wl,-rpath,$ORIGIN
 #include "lwe_bridge.h"
 #include <stdlib.h>
 */
