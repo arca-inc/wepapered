@@ -1,0 +1,23 @@
+[Unit]
+Description=wepapered – Wallpaper Engine bridge for linux-wallpaperengine
+Documentation=https://github.com/arca-inc/wepapered
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wepapered
+Restart=on-failure
+RestartSec=5s
+
+# Forward the Wayland/Hyprland env that the daemon needs
+Environment=XDG_SESSION_TYPE=wayland
+PassEnvironment=WAYLAND_DISPLAY XDG_RUNTIME_DIR HYPRLAND_INSTANCE_SIGNATURE DISPLAY
+
+# Keep logs manageable
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wepapered
+
+[Install]
+WantedBy=graphical-session.target
