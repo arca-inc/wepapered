@@ -10,7 +10,6 @@ import "C"
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"unsafe"
 )
 
@@ -27,7 +26,7 @@ var lweOutputDir = func() string {
 			return dir
 		}
 	}
-	// Development default: submodule build output relative to HOME.
+	// Development default: submodule build output.
 	return filepath.Join(os.Getenv("HOME"), "wepapered/lwe/build/output")
 }()
 
@@ -42,33 +41,4 @@ func lweSetSubprocessPath(path string) {
 	cs := C.CString(path)
 	defer C.free(unsafe.Pointer(cs))
 	C.lwe_set_subprocess_path(cs)
-}
-
-// lweRunAsync starts LWE with args in a dedicated OS-locked goroutine.
-// The returned channel is closed when LWE exits.
-// NOTE: not used for rendering in subprocess mode — kept for CGo embedded mode.
-func lweRunAsync(args []string) chan struct{} {
-	done := make(chan struct{})
-	go func() {
-		runtime.LockOSThread()
-		defer runtime.UnlockOSThread()
-		defer close(done)
-
-		argc := C.int(len(args))
-		argv := make([]*C.char, len(args))
-		for i, a := range args {
-			argv[i] = C.CString(a)
-		}
-		defer func() {
-			for _, p := range argv {
-				C.free(unsafe.Pointer(p))
-			}
-		}()
-		C.lwe_run(argc, &argv[0])
-	}()
-	return done
-}
-
-func lweStop() {
-	C.lwe_stop()
 }
