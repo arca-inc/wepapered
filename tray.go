@@ -52,8 +52,17 @@ func (t *TrayManager) onReady() {
 }
 
 func (t *TrayManager) openWEBrowser() {
-	url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default#/browsewallpapers"
-	cmd := exec.Command("xdg-open", url)
+	// Use the wepapered-ui companion binary: a frameless WebKitGTK window,
+	// no browser chrome, no address bar — Electron-like feel.
+	exe, _ := os.Executable()
+	uiBin := filepath.Join(filepath.Dir(exe), "wepapered-ui")
+	if _, err := os.Stat(uiBin); err != nil {
+		// Fallback to xdg-open if the companion binary isn't alongside the daemon.
+		url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default#/browsewallpapers"
+		exec.Command("xdg-open", url).Start() //nolint
+		return
+	}
+	cmd := exec.Command(uiBin)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
