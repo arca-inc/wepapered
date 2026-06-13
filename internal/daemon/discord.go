@@ -24,6 +24,9 @@ import (
 
 const discordClientID = "674702968964120629"
 
+// Discord activity type 3 = Watching (renders "Watching <app>").
+const activityWatching = 3
+
 const (
 	opHandshake = 0
 	opFrame     = 1
@@ -207,6 +210,9 @@ func (d *DiscordRP) push() error {
 	}
 
 	activity := map[string]interface{}{
+		// Activity type 3 = "Watching", so Discord shows "Regarde wepapered"
+		// instead of the default "Playing wepapered".
+		"type": activityWatching,
 		"assets": map[string]interface{}{
 			"large_image": "logo",
 			"large_text":  "wepapered",
