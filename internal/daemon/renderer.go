@@ -19,6 +19,43 @@ import (
 	"time"
 )
 
+// lweLogFilter wraps an LWE subprocess's stderr and drops the high-volume
+// "Fontconfig warning:" lines. CEF bundles an older libfontconfig that doesn't
+// understand newer directives (e.g. xsi:nil) in the system fontconfig 2.18.1
+// config, so every CEF process re-emits hundreds of identical warnings per web
+// wallpaper. They are benign; everything else (including crash output) passes
+// straight through. Line-buffered so prefixes can be matched across Write calls.
+type lweLogFilter struct {
+	w   *os.File
+	mu  sync.Mutex
+	buf string
+}
+
+func newLWELogFilter(w *os.File) *lweLogFilter { return &lweLogFilter{w: w} }
+
+func (f *lweLogFilter) Write(p []byte) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.buf += string(p)
+	for {
+		i := strings.IndexByte(f.buf, '\n')
+		if i < 0 {
+			break
+		}
+		line := f.buf[:i+1]
+		f.buf = f.buf[i+1:]
+		if !lweNoiseLine(line) {
+			f.w.WriteString(line) //nolint
+		}
+	}
+	return len(p), nil
+}
+
+func lweNoiseLine(line string) bool {
+	t := strings.TrimLeft(line, " \t")
+	return strings.HasPrefix(t, "Fontconfig warning:") || strings.HasPrefix(t, "Fontconfig error:")
+}
+
 func init() {
 	if os.Getuid() == 0 {
 		log.Printf("[renderer] WARNING: running as root — embedded LWE cannot connect to Wayland. Run wepapered as %s.", sessionUsername())
@@ -155,6 +192,11 @@ func lweSubprocEnv() []string {
 	extras := map[string]string{
 		"LWE_CEF_SUBPROCESS_PATH": lwesubprocessbin,
 	}
+	// Auto-select the CEF web-wallpaper GPU backend from the system (env overrides
+	// still win — see webGPUEnv).
+	for k, v := range webGPUEnv() {
+		extras[k] = v
+	}
 	icuShim := filepath.Join(lweOutputDir, "liblwe_cef_icu_fix.so")
 	if _, err := os.Stat(icuShim); err == nil {
 		extras["LD_PRELOAD"] = icuShim
@@ -167,6 +209,71 @@ func lweSubprocEnv() []string {
 		extras["LD_LIBRARY_PATH"] = lweOutputDir
 	}
 	return waylandEnvOverrides(extras)
+}
+
+var webGPULogOnce sync.Once
+
+// webGPUEnv auto-detects the environment that selects the CEF web-wallpaper GPU
+// backend (web wallpapers render WebGL through ANGLE). It returns env overrides
+// consumed by the LWE C++ side (LWE_WEB_ANGLE) and the GLVND EGL loader:
+//
+//   - a GPU is present (a /dev/dri render node) → "gl-egl" (hardware ANGLE).
+//   - NVIDIA's proprietary driver is loaded     → additionally force NVIDIA's EGL
+//     vendor, because ANGLE otherwise loads Mesa's libEGL, which can't drive the
+//     NVIDIA card and silently falls back to llvmpipe (software).
+//   - no GPU                                    → "swiftshader" (software).
+//
+// Anything the user set explicitly (LWE_WEB_ANGLE, __EGL_VENDOR_LIBRARY_FILENAMES)
+// is left untouched so manual overrides win.
+func webGPUEnv() map[string]string {
+	out := map[string]string{}
+	if v := os.Getenv("LWE_WEB_ANGLE"); v != "" {
+		webGPULogOnce.Do(func() { log.Printf("[renderer] web GPU backend: %s (LWE_WEB_ANGLE override)", v) })
+		return out
+	}
+	if !hasDRMRenderNode() {
+		out["LWE_WEB_ANGLE"] = "swiftshader"
+		webGPULogOnce.Do(func() { log.Printf("[renderer] web GPU backend: swiftshader (no GPU detected)") })
+		return out
+	}
+	out["LWE_WEB_ANGLE"] = "gl-egl"
+	vendor := ""
+	if os.Getenv("__EGL_VENDOR_LIBRARY_FILENAMES") == "" {
+		if v := nvidiaEGLVendorJSON(); v != "" {
+			out["__EGL_VENDOR_LIBRARY_FILENAMES"] = v
+			vendor = v
+		}
+	}
+	webGPULogOnce.Do(func() {
+		if vendor != "" {
+			log.Printf("[renderer] web GPU backend: gl-egl, hardware (NVIDIA EGL %s)", vendor)
+		} else {
+			log.Printf("[renderer] web GPU backend: gl-egl, hardware")
+		}
+	})
+	return out
+}
+
+// hasDRMRenderNode reports whether the system exposes a GPU render node.
+func hasDRMRenderNode() bool {
+	m, _ := filepath.Glob("/dev/dri/renderD*")
+	return len(m) > 0
+}
+
+// nvidiaEGLVendorJSON returns the path to NVIDIA's GLVND EGL vendor ICD config if
+// the proprietary NVIDIA kernel driver is loaded and its EGL vendor file exists,
+// otherwise "". Used to force ANGLE onto NVIDIA's libEGL instead of Mesa's.
+func nvidiaEGLVendorJSON() string {
+	if _, err := os.Stat("/sys/module/nvidia"); err != nil {
+		return ""
+	}
+	for _, dir := range []string{"/usr/share/glvnd/egl_vendor.d", "/etc/glvnd/egl_vendor.d"} {
+		if m, _ := filepath.Glob(filepath.Join(dir, "*nvidia*.json")); len(m) > 0 {
+			sort.Strings(m)
+			return m[0]
+		}
+	}
+	return ""
 }
 
 // ── hyprctl helpers ───────────────────────────────────────────────────────────
@@ -627,7 +734,7 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 	}
 	cmd.Env = env
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = newLWELogFilter(os.Stderr)
 
 	if readW != nil {
 		// Pass write-end as fd 3 in the subprocess

@@ -85,6 +85,18 @@ The renderer is concurrency-heavy; read `renderer.go` before touching it. Invari
 
 LWE subprocesses need a carefully constructed Wayland environment: `XDG_SESSION_TYPE=wayland`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, the Hyprland instance signature, plus `LD_LIBRARY_PATH`/`LD_PRELOAD` pointing at the LWE output dir (for bundled CEF libs and the ICU fix shim) and `LWE_CEF_SUBPROCESS_PATH` set to the minimal `lwe-cef-subprocess` helper (the full binary would try to init Wayland when CEF spawns it as a renderer and deadlock).
 
+### Web (CEF) GPU backend — auto-detected (`webGPUEnv` in `renderer.go`)
+
+`web`-type wallpapers render WebGL through ANGLE in CEF. `lweSubprocEnv` auto-selects the backend from the system so the daemon "just works" with no env:
+
+- a GPU render node exists (`/dev/dri/renderD*`) → `LWE_WEB_ANGLE=gl-egl` (hardware).
+- the NVIDIA proprietary driver is loaded → additionally force its GLVND EGL vendor via `__EGL_VENDOR_LIBRARY_FILENAMES` (else ANGLE loads Mesa's libEGL, which can't drive the NVIDIA card and silently falls back to `llvmpipe` software).
+- no GPU → `LWE_WEB_ANGLE=swiftshader` (software).
+
+The C++ side (`lwe/src/.../CEF/BrowserApp.cpp`, `lwe_cef_subprocess.cpp`) reads `LWE_WEB_ANGLE` / `LWE_WEB_OZONE` and gates GPU enablement; `LWE_WEB_GPU_LOG=1` streams Chromium GPU logs + logs the page's actual WebGL renderer. **Any of these env vars set manually override the auto-detection.** The renderer also filters the high-volume `Fontconfig warning:` lines CEF's bundled fontconfig emits (`lweLogFilter`).
+
+The web/CEF GPU stack is **CEF-version-sensitive**: the LWE submodule defaults to **CEF 135** (Alloy runtime, clean windowless OSR). CEF 148 (`-DCEF_RELEASE=148`) is Chrome-runtime-only and currently crashes windowless web wallpapers (process-singleton + fatal empty-rect `NOTREACHED`).
+
 ## Working with the submodule
 
 `lwe/` is the patched LWE fork. The C-ABI contract between the daemon and LWE is in `lwe/src/lwe_bridge.h` and the ctrl-socket / READY-fd protocol is implemented in `lwe/src/main.cpp` (look for `WEPAPERED_CTRL_SOCK` / `WEPAPERED_READY_FD`). If you change that protocol you must update both `renderer.go` (Go side) and the LWE C++ side, and rebuild the library before rebuilding the daemon.
