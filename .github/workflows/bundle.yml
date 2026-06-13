@@ -109,8 +109,9 @@ jobs:
           rm -f dist/wepapered/*-float dist/wepapered/spirv-remap \
                 dist/wepapered/glslangValidator dist/wepapered/glslang \
                 dist/wepapered/spirv-cross
-          # Ship the install guide inside the archive too.
+          # Ship the install guides inside the archive too (EN + FR).
           cp packaging/RELEASE.md dist/wepapered/INSTALL.md
+          cp packaging/RELEASE_FR.md dist/wepapered/INSTALL_FR.md
 
           # Resolve colocated deps via $ORIGIN — but ONLY for the daemon, the LWE
           # binaries and the bundled libs. wepapered-gui/settings deliberately keep

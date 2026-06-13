@@ -1,43 +1,44 @@
 # wepapered — installation
 
-Wallpaper Engine rendu nativement sur **Hyprland / Wayland**. Cette archive est
-**autonome** : ffmpeg, mpv et les codecs sont embarqués, donc elle tourne quelle
-que soit la version ffmpeg de ta distribution.
+🇫🇷 *Version française : [INSTALL_FR.md](INSTALL_FR.md) (in the archive) / [RELEASE_FR.md](packaging/RELEASE_FR.md) (repo).*
 
-## Prérequis (côté système)
+Wallpaper Engine rendered natively on **Hyprland / Wayland**. This archive is
+**self-contained**: ffmpeg, mpv and the codecs are bundled, so it runs whatever
+ffmpeg version your distribution ships.
 
-- **Hyprland** en cours d'exécution (le daemon appelle `hyprctl`).
-- Une session **Wayland**, lancée en tant qu'**utilisateur** de la session (pas root).
-- **Wallpaper Engine** installé (via Steam/Proton) pour parcourir et choisir les fonds.
-- Paquets système usuels d'un bureau : pilote GPU / Mesa (`libGL`/`libEGL`),
-  `wayland`, `gtk3` + `webkit2gtk-4.1` (fenêtre de navigation), `nss` (CEF),
-  `fontconfig`/`freetype`, `dbus`, et un serveur audio (`pulseaudio`/`pipewire`).
-- Optionnel : `hyprpaper` ou `swww` pour l'image de chargement.
+## Requirements (host side)
 
-## Installation
+- **Hyprland** running (the daemon shells out to `hyprctl`).
+- A **Wayland** session, started as the **session user** (not root).
+- **Wallpaper Engine** installed (via Steam/Proton) to browse and pick wallpapers.
+- Usual desktop system packages: GPU driver / Mesa (`libGL`/`libEGL`),
+  `wayland`, `gtk3` + `webkit2gtk-4.1` (browse window), `nss` (CEF),
+  `fontconfig`/`freetype`, `dbus`, and an audio server (`pulseaudio`/`pipewire`).
+- Optional: `hyprpaper` or `swww` for the loading placeholder.
+
+## Install
 
 ```bash
 tar -xzf wepapered-linux-amd64.tar.gz
 cd wepapered
 
-# Lancer le daemon (rend les fonds + sert l'UI)
+# Start the daemon (renders wallpapers + serves the UI)
 ./wepapered-daemon
 
-# Dans un autre terminal :
-./wepapered-gui        # fenêtre de navigation Wallpaper Engine
-./wepapered-settings   # réglages (chemin WE, clé API, thème…)
+# In another terminal:
+./wepapered-gui        # Wallpaper Engine browse window
+./wepapered-settings   # settings (WE path, API key, theme…)
 ```
 
-`wepaperedctl <daemon|gui|settings>` fait la même chose via un dispatcher unique.
+`wepaperedctl <daemon|gui|settings>` does the same through a single dispatcher.
 
-Pour une installation système (binaires dans `/opt`, lanceurs `.desktop`,
-service `systemd --user`), voir `packaging/arch/PKGBUILD` (paquet AUR pour Arch).
+For a system install (binaries under `/opt`, `.desktop` launchers, a
+`systemd --user` service), see `packaging/arch/PKGBUILD` (AUR package for Arch).
 
 ## Notes
 
-- Garder les binaires **ensemble** : ils se localisent les uns les autres et la
-  bibliothèque LWE via `$ORIGIN` (chemins relatifs au binaire).
-- Le chemin de Wallpaper Engine est auto-détecté depuis les emplacements Steam
-  courants ; sinon, renseigne-le dans **Réglages**.
-- L'abonnement/téléchargement Workshop en direct nécessite le client **Steam**
-  ouvert et connecté.
+- Keep the binaries **together**: they locate each other and the LWE library via
+  `$ORIGIN` (paths relative to the binary).
+- The Wallpaper Engine path is auto-detected from common Steam locations;
+  otherwise set it in **Settings**.
+- Live Workshop subscribe/download needs the **Steam** client open and logged in.
