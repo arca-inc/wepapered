@@ -64,18 +64,58 @@ jobs:
 
       - name: Assemble bundle
         run: |
+          set -euo pipefail
           mkdir -p dist/wepapered
           cp bin/wepapered-daemon bin/wepapered-gui bin/wepapered-settings bin/wepaperedctl dist/wepapered/
           # Colocate the LWE runtime next to the binaries (paths.go expects
           # linux-wallpaperengine to sit beside the executable in a packaged install).
           cp -a lwe/build/output/. dist/wepapered/
-          # Self-contain: resolve colocated libs via $ORIGIN regardless of cwd.
+
+          # Make the bundle self-contained across distros: copy the *media* library
+          # closure (ffmpeg + mpv + their codecs) next to the binaries. The runner
+          # is ubuntu-24.04 (FFmpeg 6); other distros ship different sonames
+          # (e.g. Gentoo FFmpeg 7), so without this the engine can't load.
+          #
+          # libmpv is bundled too, so it uses the SAME bundled ffmpeg as the engine
+          # (two ffmpeg majors in one process would clash). The graphics/display and
+          # core system stack is intentionally KEPT on the host — bundling GL
+          # drivers, wayland/X, glibc, gtk/webkit, nss or audio breaks portability.
+          EXCLUDE='^(ld-linux|libc\.|libm\.|libdl\.|libpthread|librt\.|libresolv|libutil\.|libstdc\+\+|libgcc_s|libGL|libEGL|libGLES|libOpenGL|libglapi|libgbm|libdrm|libwayland|libxkbcommon|libX|libxcb|libICE|libSM|libdbus|libsystemd|libudev|libselinux|libcap|libgio-2|libglib-2|libgobject|libgmodule|libgthread|libgtk-|libgdk|libwebkit2gtk|libjavascriptcoregtk|libpango|libcairo|libgdk_pixbuf|libatk|libepoxy|libfontconfig|libfreetype|libharfbuzz|libfribidi|libthai|libdatrie|libgraphite2|libasound|libpulse|libnss|libnspr|libplc|libplds|libsmime|libva|libvdpau|libz\.|libbz2|liblzma|libzstd|libcrypto|libssl|libgnutls|libp11-kit|libtasn1|libidn2|libunistring|libffi|libpcre|libmount|libblkid|libuuid|libgcrypt|libgpg-error)'
+
+          # Resolve the closure with the in-bundle libs visible (so only the
+          # remaining => /usr/... system libs are candidates to bundle).
+          closure=$( { LD_LIBRARY_PATH=dist/wepapered ldd \
+              dist/wepapered/wepapered-daemon \
+              dist/wepapered/linux-wallpaperengine \
+              dist/wepapered/lwe-cef-subprocess \
+              || true; } 2>/dev/null | awk '/=> \//{print $3}' | sort -u)
+          while read -r lib; do
+            [ -n "$lib" ] && [ -f "$lib" ] || continue
+            base=$(basename "$lib")
+            if printf '%s\n' "$base" | grep -Eq "$EXCLUDE"; then continue; fi
+            if [ -e "dist/wepapered/$base" ]; then continue; fi   # already in the bundle
+            cp -L "$lib" "dist/wepapered/$base"
+            echo "bundled: $base"
+          done <<< "$closure"
+
+          # Self-contain: every ELF resolves its colocated deps via $ORIGIN.
           for f in dist/wepapered/*; do
             [ -f "$f" ] || continue
             if file "$f" | grep -q ELF; then patchelf --set-rpath '$ORIGIN' "$f" || true; fi
           done
+
           tar -czf wepapered-linux-amd64.tar.gz -C dist wepapered
           du -sh dist/wepapered
+
+      - name: Verify no missing media libs
+        run: |
+          # With the host's media libs removed from the search path, the engine
+          # must still resolve everything from $ORIGIN — proving portability.
+          cd dist/wepapered
+          miss=$(ldd ./linux-wallpaperengine 2>/dev/null | grep -i 'not found' \
+                 | grep -viE 'libGL|libEGL|libwayland|libX|libgbm|libdrm|libasound|libpulse' || true)
+          if [ -n "$miss" ]; then echo "MISSING media libs:"; echo "$miss"; exit 1; fi
+          echo "OK: media closure self-contained"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
