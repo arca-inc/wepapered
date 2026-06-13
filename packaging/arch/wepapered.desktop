@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wepapered
+GenericName=Wallpaper Engine
+Comment=Browse and apply Wallpaper Engine wallpapers
+Exec=wepaperedctl gui
+Icon=preferences-desktop-wallpaper
+Terminal=false
+Categories=Graphics;
+Keywords=wallpaper;wallpaperengine;desktop;background;
+StartupNotify=false
+StartupWMClass=wepapered-gui

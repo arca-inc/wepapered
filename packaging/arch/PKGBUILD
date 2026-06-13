@@ -1,0 +1,140 @@
+# Maintainer: Warmadon (Paul Claudon) <paul.petitnicolas at gmail dot com>
+# Maintainer: David Gheghea <david.gheghea at gmail dot com>
+
+pkgname=wepapered-git
+_pkgname=wepapered
+pkgver=r61.eb4c46c
+pkgrel=1
+pkgdesc='Wallpaper Engine wallpapers rendered natively on Hyprland and Wayland'
+arch=('x86_64')
+url='https://github.com/arca-inc/wepapered'
+license=('custom')
+depends=('gtk3' 'webkit2gtk-4.1' 'hyprland' 'nss'
+         'mpv' 'ffmpeg' 'sdl2' 'glew' 'glfw' 'freeglut' 'glu')
+makedepends=('go' 'cmake' 'git' 'gcc' 'patchelf')
+optdepends=('hyprpaper: default loading placeholder backend'
+            'swww: alternative loading placeholder backend')
+provides=('wepapered')
+conflicts=('wepapered')
+# !buildflags: the bundled CEF/LWE build compiles with -Werror and its own flag
+# set; makepkg's hardening CFLAGS (e.g. -D_FORTIFY_SOURCE) collide and abort it.
+options=('!strip' '!debug' '!lto' '!buildflags')
+install=wepapered.install
+# Remote (AUR) source. To test against your local working tree before pushing,
+# point this at the local repo instead:
+#   source=("${_pkgname}::git+file://${startdir}/../..")
+# The desktop entries and the service are package-local files that live next to
+# this PKGBUILD (not in the upstream repo), so they are listed as plain sources
+# and installed from ${srcdir}.
+source=("${_pkgname}::git+https://github.com/arca-inc/wepapered.git"
+        'wepapered.desktop'
+        'wepapered-settings.desktop'
+        'wepapered.service')
+sha256sums=('SKIP'
+            'SKIP'
+            'SKIP'
+            'SKIP')
+
+pkgver() {
+	cd "${srcdir}/${_pkgname}"
+	printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+	cd "${srcdir}/${_pkgname}"
+	# lwe is a private submodule (arca-inc/lwe-patched); cloning it needs git
+	# access until that repo is public.
+	git submodule update --init --recursive
+}
+
+build() {
+	cd "${srcdir}/${_pkgname}"
+	# The patched linux-wallpaperengine library (default CEF 135). The CMake
+	# downloads CEF during this step.
+	#
+	# CEF's bundled wrapper compiles with -Werror and its own flag set; the distro
+	# hardening flags (notably a second -D_FORTIFY_SOURCE) collide and abort it.
+	# Configure with empty C/C++ flags so CEF/LWE use their own. These are emptied
+	# explicitly (not only via !buildflags) because the flags are baked into
+	# CMakeCache at configure time.
+	CFLAGS='' CXXFLAGS='' CPPFLAGS='' LDFLAGS='' \
+		cmake -S lwe -B lwe/build -DCMAKE_BUILD_TYPE=Release
+	cmake --build lwe/build -j"$(nproc)"
+	# The four Go binaries into ./bin.
+	make
+}
+
+package() {
+	cd "${srcdir}/${_pkgname}"
+	local _libdir="${pkgdir}/usr/lib/wepapered"
+	local _out='lwe/build/output'
+	install -dm755 "${_libdir}"
+
+	# The four wepapered binaries.
+	install -m755 \
+		bin/wepapered-daemon bin/wepapered-gui bin/wepapered-settings bin/wepaperedctl \
+		"${_libdir}/"
+
+	# The LWE runtime: the engine binary, the CEF subprocess helper, the shared
+	# libraries and the CEF resource files. Everything is colocated with the
+	# binaries so they locate each other and libcef through $ORIGIN. The glslang,
+	# SPIRV, QuickJS and FFT build tools in the output dir are not shipped.
+	install -m755 \
+		"${_out}/linux-wallpaperengine" \
+		"${_out}/lwe-cef-subprocess" \
+		"${_out}/liblinux-wallpaperengine-lib.so" \
+		"${_out}/libcef.so" \
+		"${_out}/libEGL.so" \
+		"${_out}/libGLESv2.so" \
+		"${_out}/libvk_swiftshader.so" \
+		"${_libdir}/"
+	# kissfft is built into lwe/build/lib (not output) under a versioned soname;
+	# liblinux-wallpaperengine-lib.so needs it at load time, so ship it too.
+	install -m755 lwe/build/lib/libkissfft-float.so.131.1.0 \
+		"${_libdir}/libkissfft-float.so.131"
+	install -m644 \
+		"${_out}/icudtl.dat" \
+		"${_out}/chrome_100_percent.pak" \
+		"${_out}/chrome_200_percent.pak" \
+		"${_out}/resources.pak" \
+		"${_out}/v8_context_snapshot.bin" \
+		"${_out}/vk_swiftshader_icd.json" \
+		"${_libdir}/"
+	cp -a "${_out}/locales" "${_libdir}/"
+
+	# The LWE binaries and libraries bake absolute build-tree rpaths (lwe/build/lib
+	# and the CEF Release dir); rewrite them to $ORIGIN so the bundle is
+	# self-contained and resolves its colocated libraries on any machine, however
+	# the daemon is launched.
+	local _f
+	for _f in "${_libdir}"/linux-wallpaperengine "${_libdir}"/lwe-cef-subprocess \
+	          "${_libdir}"/wepapered-daemon "${_libdir}"/*.so "${_libdir}"/*.so.*; do
+		[ -f "${_f}" ] || continue
+		patchelf --set-rpath '$ORIGIN' "${_f}"
+	done
+
+	# User-facing commands on PATH. The symlinks resolve back into
+	# /usr/lib/wepapered (readlink /proc/self/exe), so sibling and LWE lookup
+	# still works.
+	install -dm755 "${pkgdir}/usr/bin"
+	local _b
+	for _b in wepaperedctl wepapered-daemon wepapered-gui wepapered-settings; do
+		ln -s "/usr/lib/wepapered/${_b}" "${pkgdir}/usr/bin/${_b}"
+	done
+
+	# Desktop entries (the browse window and the settings window). Taken from the
+	# package-local sources copied into srcdir, not from the cloned repo.
+	install -Dm644 "${srcdir}/wepapered.desktop" \
+		"${pkgdir}/usr/share/applications/wepapered.desktop"
+	install -Dm644 "${srcdir}/wepapered-settings.desktop" \
+		"${pkgdir}/usr/share/applications/wepapered-settings.desktop"
+
+	# systemd user service.
+	install -Dm644 "${srcdir}/wepapered.service" \
+		"${pkgdir}/usr/lib/systemd/user/wepapered.service"
+
+	# License, once one is added upstream (the AUR requires one).
+	if [ -f LICENSE ]; then
+		install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+	fi
+}

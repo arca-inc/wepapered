@@ -1,0 +1,6 @@
+# makepkg build output
+/pkg/
+/src/
+/wepapered/
+*.pkg.tar.*
+*.log

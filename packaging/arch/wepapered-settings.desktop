@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Wepapered Settings
+Comment=Configure Wepapered (Wallpaper Engine path, theme, directories)
+Exec=wepaperedctl settings
+Icon=preferences-desktop-wallpaper
+Terminal=false
+Categories=Settings;
+Keywords=wallpaper;settings;configuration;wepapered;
+StartupNotify=false
