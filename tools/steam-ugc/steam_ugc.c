@@ -18,12 +18,38 @@
 
 typedef uint64_t PublishedFileId_t;
 typedef uint64_t SteamAPICall_t;
+typedef int32_t  HSteamPipe;
 
 // ESteamAPIInitResult: 0 == k_ESteamAPIInitResult_OK
 extern int   SteamAPI_InitFlat(char *pOutErrMsgUTF8 /* >=1024 */);
 extern void  SteamAPI_Shutdown(void);
-extern void  SteamAPI_RunCallbacks(void);
 extern void *SteamAPI_SteamUGC_v021(void);
+
+// Manual callback dispatch. SteamAPI_InitFlat requires this (the legacy
+// SteamAPI_RunCallbacks is unsupported with the flat init and stalls the
+// cross-thread pipe). We don't decode the callbacks — draining the queue each
+// frame is enough to service the pipe so GetItemState/DownloadInfo advance.
+typedef struct CallbackMsg_t {
+	int32_t  m_hSteamUser;
+	int      m_iCallback;
+	uint8_t *m_pubParam;
+	int      m_cubParam;
+} CallbackMsg_t;
+extern HSteamPipe SteamAPI_GetHSteamPipe(void);
+extern void SteamAPI_ManualDispatch_Init(void);
+extern void SteamAPI_ManualDispatch_RunFrame(HSteamPipe pipe);
+extern bool SteamAPI_ManualDispatch_GetNextCallback(HSteamPipe pipe, CallbackMsg_t *msg);
+extern void SteamAPI_ManualDispatch_FreeLastCallback(HSteamPipe pipe);
+
+// pumpCallbacks services the Steam pipe once (drains and frees all pending
+// callbacks). Must be called regularly or the pipe stalls.
+static void pumpCallbacks(HSteamPipe pipe) {
+	SteamAPI_ManualDispatch_RunFrame(pipe);
+	CallbackMsg_t msg;
+	while (SteamAPI_ManualDispatch_GetNextCallback(pipe, &msg)) {
+		SteamAPI_ManualDispatch_FreeLastCallback(pipe);
+	}
+}
 extern SteamAPICall_t SteamAPI_ISteamUGC_SubscribeItem(void *self, PublishedFileId_t id);
 extern SteamAPICall_t SteamAPI_ISteamUGC_UnsubscribeItem(void *self, PublishedFileId_t id);
 extern bool     SteamAPI_ISteamUGC_DownloadItem(void *self, PublishedFileId_t id, bool bHighPriority);
@@ -53,6 +79,9 @@ int main(int argc, char **argv) {
     void *ugc = SteamAPI_SteamUGC_v021();
     if (!ugc) { fprintf(stderr, "ISteamUGC unavailable\n"); SteamAPI_Shutdown(); return 1; }
 
+    SteamAPI_ManualDispatch_Init();
+    HSteamPipe pipe = SteamAPI_GetHSteamPipe();
+
     if (argc < 2) {
         printf("OK: connected, %u subscribed items\n", SteamAPI_ISteamUGC_GetNumSubscribedItems(ugc));
         SteamAPI_Shutdown();
@@ -70,7 +99,7 @@ int main(int argc, char **argv) {
             fflush(stdout);
         }
         // Let the unsubscribe calls flush to the client.
-        for (int i = 0; i < 25; i++) { SteamAPI_RunCallbacks(); usleep(100000); }
+        for (int i = 0; i < 25; i++) { pumpCallbacks(pipe); usleep(100000); }
         SteamAPI_Shutdown();
         return rc;
     }
@@ -85,7 +114,7 @@ int main(int argc, char **argv) {
         fflush(stdout);
         int done = 0;
         for (int i = 0; i < 3000; i++) { // up to ~10 min
-            SteamAPI_RunCallbacks();
+            pumpCallbacks(pipe);
             uint32_t st = SteamAPI_ISteamUGC_GetItemState(ugc, id);
             if ((st & ItemInstalled) &&
                 !(st & (ItemNeedsUpdate | ItemDownloading | ItemDownloadPending))) {

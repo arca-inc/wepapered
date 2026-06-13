@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -21,7 +23,7 @@ var steamUGCBin = filepath.Join(lweOutputDir, "wepapered-steam-ugc")
 // (the content lands in …/workshop/content/431960/<id>/, which enumerateLibrary
 // already scans). Returns false if the helper isn't available, so the caller can
 // fall back to opening the Steam Workshop page.
-func steamSubscribeDownload(ids []string, onProgress func(id string, down, total uint64), onInstalled func(id string)) bool {
+func steamSubscribeDownload(ids []string, onProgress func(id string, down, total uint64), onInstalled func(id string), onError func(reason string)) bool {
 	if len(ids) == 0 {
 		return true
 	}
@@ -29,7 +31,8 @@ func steamSubscribeDownload(ids []string, onProgress func(id string, down, total
 		return false
 	}
 	cmd := exec.Command(steamUGCBin, ids...)
-	cmd.Stderr = os.Stderr
+	var errBuf bytes.Buffer
+	cmd.Stderr = io.MultiWriter(os.Stderr, &errBuf)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return false
@@ -40,12 +43,14 @@ func steamSubscribeDownload(ids []string, onProgress func(id string, down, total
 	}
 	log.Printf("[steam-ugc] subscribing/downloading %v", ids)
 	go func() {
+		installedAny := false
 		sc := bufio.NewScanner(stdout)
 		for sc.Scan() {
 			f := strings.Fields(strings.TrimSpace(sc.Text()))
 			switch {
 			case len(f) == 2 && f[0] == "installed":
 				log.Printf("[steam-ugc] installed %s", f[1])
+				installedAny = true
 				if onInstalled != nil {
 					onInstalled(f[1])
 				}
@@ -57,11 +62,31 @@ func steamSubscribeDownload(ids []string, onProgress func(id string, down, total
 				}
 			}
 		}
-		if err := cmd.Wait(); err != nil {
-			log.Printf("[steam-ugc] helper exited: %v", err)
+		waitErr := cmd.Wait()
+		if waitErr != nil {
+			log.Printf("[steam-ugc] helper exited: %v", waitErr)
+		}
+		// A failure with nothing installed means the download never happened —
+		// surface a classified reason so the UI can tell the user why.
+		if waitErr != nil && !installedAny && onError != nil {
+			onError(classifyUGCError(errBuf.String()))
 		}
 	}()
 	return true
+}
+
+// classifyUGCError maps the helper's stderr to a short user-facing reason.
+func classifyUGCError(stderr string) string {
+	switch {
+	case strings.Contains(stderr, "not running"),
+		strings.Contains(stderr, "Cannot create IPC pipe"),
+		strings.Contains(stderr, "did not locate a running instance"):
+		return "Steam is not running — start Steam and try again."
+	case strings.Contains(stderr, "denied appID"):
+		return "Steam: this account does not own Wallpaper Engine."
+	default:
+		return "Steam UGC unavailable — download failed."
+	}
 }
 
 // steamUnsubscribe asks the Steam client to unsubscribe from the given workshop

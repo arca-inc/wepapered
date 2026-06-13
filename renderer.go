@@ -238,13 +238,55 @@ func (r *Renderer) startLoadingBgLocked(outputs []hyprOutput) {
 	r.startLoadingBgWithPreviewLocked(entries)
 }
 
-// hyprctlWallpaper preloads an image in the running hyprpaper daemon and
-// assigns it as the wallpaper for the given output via hyprctl IPC.
-// This is more reliable than launching a new hyprpaper process because the
-// daemon's config file (hyprpaper.conf) is read at startup and the --config
-// flag is ignored by many hyprpaper versions.
-func (r *Renderer) hyprctlWallpaper(outputName, imgPath string) {
+// setPlaceholder paints the loading placeholder image on an output using the
+// configured backend. The placeholder is only shown briefly, until the LWE
+// subprocess paints its first frame and covers it.
+//
+// Backends: "hyprpaper" (default), "swww", "none", or a custom command template
+// where {output} and {image} are substituted as standalone argv tokens (so paths
+// with spaces survive without quoting), e.g. "swww img {image} --outputs {output}".
+func (r *Renderer) setPlaceholder(outputName, imgPath string) {
+	backend := strings.TrimSpace(r.cfg.PlaceholderBackend)
+	if backend == "" {
+		backend = "hyprpaper"
+	}
 	env := waylandEnvOverrides(nil)
+
+	switch backend {
+	case "none":
+		return
+	case "hyprpaper":
+		r.hyprpaperPlaceholder(outputName, imgPath, env)
+	case "swww":
+		r.runPlaceholderCmd(env, "swww", "img", imgPath, "--outputs", outputName)
+	default:
+		// Custom command template. Split into argv, then substitute tokens per
+		// field so {image}/{output} each become a single literal arg.
+		fields := strings.Fields(backend)
+		for i := range fields {
+			fields[i] = strings.ReplaceAll(fields[i], "{output}", outputName)
+			fields[i] = strings.ReplaceAll(fields[i], "{image}", imgPath)
+		}
+		if len(fields) == 0 {
+			return
+		}
+		r.runPlaceholderCmd(env, fields[0], fields[1:]...)
+	}
+}
+
+func (r *Renderer) runPlaceholderCmd(env []string, name string, args ...string) {
+	cmd := exec.Command(name, args...)
+	cmd.Env = env
+	if err := cmd.Run(); err != nil {
+		log.Printf("[renderer] placeholder (%s): %v", name, err)
+	}
+}
+
+// hyprpaperPlaceholder preloads an image in the running hyprpaper daemon and
+// assigns it to the output via hyprctl IPC. This is more reliable than launching
+// a new hyprpaper process because the daemon's config file (hyprpaper.conf) is
+// read at startup and the --config flag is ignored by many hyprpaper versions.
+func (r *Renderer) hyprpaperPlaceholder(outputName, imgPath string, env []string) {
 	preload := exec.Command("hyprctl", "hyprpaper", "preload", imgPath)
 	preload.Env = env
 	if err := preload.Run(); err != nil {
@@ -271,7 +313,7 @@ func (r *Renderer) startLoadingBgWithPreviewLocked(entries []loadingOutputEntry)
 				img = e.previewPath
 			}
 		}
-		go r.hyprctlWallpaper(e.output.Name, img)
+		go r.setPlaceholder(e.output.Name, img)
 	}
 }
 
@@ -804,7 +846,7 @@ func errorWallpaperDir(label, title, typ string) string {
 	}
 	page := fmt.Sprintf(`<!DOCTYPE html>
 <html><body style="background:#000;margin:0;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh">
-<div style="color:#cc0000;font:bold 32px monospace">Wallpaper non supporté</div>
+<div style="color:#cc0000;font:bold 32px monospace">Unsupported wallpaper</div>
 <div style="color:#ff4444;font:22px monospace;margin-top:16px">%s</div>
 <div style="color:#888888;font:16px monospace;margin-top:10px">type: %s</div>
 </body></html>`, safeTitle, safeType)

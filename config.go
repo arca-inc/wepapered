@@ -10,6 +10,20 @@ type Config struct {
 	WEPath      string            `json:"we_path"`
 	SteamAPIKey string            `json:"steam_api_key"`
 	Assignments map[string]string `json:"assignments"`
+	// CustomDirs are extra directories to scan for manually-downloaded
+	// wallpapers. Each entry may be a single wallpaper directory (one holding a
+	// project.json) or a parent directory containing many such subdirectories.
+	CustomDirs []string `json:"custom_dirs"`
+	// GuiSkin selects the WE UI theme for the native window, by stylesheet base
+	// name under ui/dist/styles (without the .css). Defaults to "skindark".
+	// Other shipped options: skinobsidian, skinspace, skinmetal, skinmist,
+	// skinmoss, skinrose, skinrust, skinwinter, skinhalloween, main (light).
+	GuiSkin string `json:"gui_skin"`
+	// PlaceholderBackend chooses the tool that paints the loading placeholder
+	// image on each output while LWE starts up: "hyprpaper" (default), "swww",
+	// "none" (no placeholder), or a custom command template where {output} and
+	// {image} are substituted (e.g. "swww img {image} --outputs {output}").
+	PlaceholderBackend string `json:"placeholder_backend"`
 }
 
 func configPath() string {

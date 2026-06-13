@@ -26,6 +26,29 @@ type MonitorWallpaper struct {
 type DaemonState struct {
 	Monitors map[string]*MonitorWallpaper `json:"monitors"` // key = Monitor0, Monitor1…
 	WEPath   string                       `json:"we_path"`
+	// Layout mirrors WE's wallpaperConfig.layout: 0 = per-monitor, 1 = stretch a
+	// single wallpaper across all displays, 2 = clone the same wallpaper on each.
+	Layout int `json:"layout"`
+	// BrowserSettings is WE's browserSettings object (viewiconsize, results per
+	// page, showmonitorselectiononstart, …) persisted verbatim so UI preferences
+	// survive restarts. Restored into the UI on load.
+	BrowserSettings json.RawMessage `json:"browser_settings,omitempty"`
+}
+
+// snapshot returns an independent copy for rollback. The map entries are never
+// mutated in place (selections replace whole *MonitorWallpaper pointers), so
+// copying the map with the same pointers is safe.
+func (st *DaemonState) snapshot() *DaemonState {
+	cp := &DaemonState{
+		Monitors:        make(map[string]*MonitorWallpaper, len(st.Monitors)),
+		WEPath:          st.WEPath,
+		Layout:          st.Layout,
+		BrowserSettings: st.BrowserSettings,
+	}
+	for k, v := range st.Monitors {
+		cp.Monitors[k] = v
+	}
+	return cp
 }
 
 func statePath() string {

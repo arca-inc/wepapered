@@ -53,16 +53,16 @@ func (t *TrayManager) onReady() {
 
 func (t *TrayManager) openWEBrowser() {
 	// Use the wepapered-ui companion binary: a frameless WebKitGTK window,
-	// no browser chrome, no address bar — Electron-like feel.
-	exe, _ := os.Executable()
-	uiBin := filepath.Join(filepath.Dir(exe), "wepapered-ui")
-	if _, err := os.Stat(uiBin); err != nil {
-		// Fallback to xdg-open if the companion binary isn't alongside the daemon.
-		url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default#/browsewallpapers"
+	// no browser chrome, no address bar — Electron-like feel. The daemon is
+	// already running (the tray lives in it), so just open the window.
+	url := guiURL(t.cfg)
+	bin := findCompanion()
+	if bin == "" {
+		// Fallback to a browser if the companion binary isn't shipped alongside.
 		exec.Command("xdg-open", url).Start() //nolint
 		return
 	}
-	cmd := exec.Command(uiBin)
+	cmd := exec.Command(bin, url)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -79,7 +79,7 @@ func (t *TrayManager) openConfigUI() {
 		log.Printf("[wepapered] Could not find own executable: %v", err)
 		return
 	}
-	cmd := exec.Command(exe, "--ui")
+	cmd := exec.Command(exe, "--config")
 	if err := cmd.Start(); err != nil {
 		log.Printf("[wepapered] Failed to start config UI: %v", err)
 	} else {

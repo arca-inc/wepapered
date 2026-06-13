@@ -39,6 +39,10 @@ type WSServer struct {
 	renderer     *Renderer
 	discord      *DiscordRP
 
+	// sessionBaseline is a snapshot of the state when the browse UI last opened,
+	// used to roll back on Cancel (cancelAndClose).
+	sessionBaseline *DaemonState
+
 	// Debounce state for queryWorkshop (see handleQueryWorkshop).
 	qwMu    sync.Mutex
 	qwTimer *time.Timer
@@ -91,6 +95,35 @@ func (s *WSServer) Start(addr string) {
 		filePath := filepath.Join(steamappsPath, reqPath)
 		http.ServeFile(w, r, filePath)
 	})
+	mux.HandleFunc("/projects/", func(w http.ResponseWriter, r *http.Request) {
+		reqPath := r.URL.Path[len("/projects/"):]
+		filePath := filepath.Join(s.cfg.WEPath, "projects", reqPath)
+		http.ServeFile(w, r, filePath)
+	})
+	// /asset serves a preview by absolute path, restricted to known roots (the WE
+	// install, configured custom dirs, Steam libraries). Used for wallpapers that
+	// live outside the /projects and /steamapps trees (custom dirs).
+	mux.HandleFunc("/asset/", func(w http.ResponseWriter, r *http.Request) {
+		p := filepath.Clean(r.URL.Path[len("/asset"):]) // keeps the leading slash
+		roots := append([]string{s.cfg.WEPath}, s.cfg.CustomDirs...)
+		roots = append(roots, steamLibraryDirs()...)
+		allowed := false
+		for _, root := range roots {
+			if root == "" {
+				continue
+			}
+			root = filepath.Clean(root)
+			if p == root || strings.HasPrefix(p, root+string(os.PathSeparator)) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		http.ServeFile(w, r, p)
+	})
 	go func() {
 		log.Printf("[wepapered] WS server on %s", addr)
 		if err := http.ListenAndServe(addr, mux); err != nil {
@@ -109,12 +142,50 @@ func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	log.Printf("[wepapered] UI connected (%s)", r.RemoteAddr)
 
+	// Snapshot the state as the rollback baseline for this browse session (Cancel).
+	s.sessionBaseline = s.state.snapshot()
+
 	// Send current state immediately so the inject script can restore active wallpapers.
 	if stateData, err := json.Marshal(map[string]interface{}{
 		"type":  "state",
 		"state": s.state,
 	}); err == nil {
 		conn.WriteMessage(websocket.TextMessage, stateData)
+	}
+
+	// Push the real displays so the hosted UI's "Choose display" picker is
+	// populated before any wallpaper is assigned (otherwise it has nothing to
+	// select, and a wallpaper can't be applied without a selected monitor).
+	if outs, err := hyprlandOutputs(); err == nil && len(outs) > 0 {
+		var disp []map[string]interface{}
+		for i, o := range outs {
+			w, h := o.Width, o.Height
+			if w == 0 {
+				w = 1920
+			}
+			if h == 0 {
+				h = 1080
+			}
+			disp = append(disp, map[string]interface{}{
+				"index":      i,
+				"location":   i,
+				"name":       fmt.Sprintf("Monitor%d", i),
+				"deviceName": o.Name,
+				"devicePath": fmt.Sprintf("Monitor%d", i),
+				"isClone":    false,
+				"isInGroup":  false,
+				"x0":         o.X,
+				"y0":         o.Y,
+				"x1":         o.X + w,
+				"y1":         o.Y + h,
+			})
+		}
+		if data, err := json.Marshal(map[string]interface{}{
+			"type":     "displays",
+			"displays": disp,
+		}); err == nil {
+			conn.WriteMessage(websocket.TextMessage, data)
+		}
 	}
 
 	// Push the library + translations so a hosted UI client (CEF/probe) can
@@ -235,12 +306,188 @@ func (s *WSServer) handleBrowse(conn *websocket.Conn, msg WEMessage) {
 	case "persistUserMonitorSettings":
 		log.Printf("[WE] monitor settings persisted")
 	case "persistBrowserSettings":
-		log.Printf("[WE] browser settings persisted")
+		s.onPersistBrowserSettings(msg.Args)
+	case "changeLayout":
+		s.onChangeLayout(msg.Args)
+	case "acceptAndClose":
+		s.onAcceptAndClose()
+	case "cancelAndClose":
+		s.onCancelAndClose()
+	case "showSettingsDialog":
+		s.openConfigWindow()
 	case "updateProfile":
 		log.Printf("[WE] updateProfile intercepted — callback will be wrapped")
 	default:
 		log.Printf("[WE] browse.%s", msg.Method)
 	}
+}
+
+// layoutClone is WE's "Clone single wallpaper" layout: the same wallpaper is
+// shown on every display.
+const layoutClone = 2
+
+// onChangeLayout records WE's wallpaper layout mode and, when switching to clone,
+// immediately mirrors the current selection across all outputs.
+func (s *WSServer) onChangeLayout(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	v, ok := args[0].(float64)
+	if !ok {
+		return
+	}
+	s.state.Layout = int(v)
+	log.Printf("[WE] layout → %d", s.state.Layout)
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+
+	// Re-clone the current wallpaper onto every display right away so toggling to
+	// clone mode takes effect without re-picking.
+	if s.state.Layout == layoutClone {
+		if src := s.anyMonitorWallpaper(); src != nil {
+			s.cloneToAllOutputs(src)
+			saveState(s.state) //nolint
+			writeWESelectedWallpapers(s.cfg.WEPath, s.state.Monitors, s.monitorInfos) //nolint
+			go s.renderer.Apply(s.state)
+		}
+	}
+}
+
+// allMonitorLabels returns the Monitor0..N labels for the current real outputs,
+// falling back to whatever labels are already in state if hyprctl is unavailable.
+func (s *WSServer) allMonitorLabels() []string {
+	if outs, err := hyprlandOutputs(); err == nil && len(outs) > 0 {
+		labels := make([]string, len(outs))
+		for i := range outs {
+			labels[i] = fmt.Sprintf("Monitor%d", i)
+		}
+		return labels
+	}
+	var labels []string
+	for k := range s.state.Monitors {
+		labels = append(labels, k)
+	}
+	return labels
+}
+
+// devicePathFor resolves the WE device path for a Monitor label via the
+// monitormap, or "" if unknown.
+func (s *WSServer) devicePathFor(label string) string {
+	loc := -1
+	fmt.Sscanf(label, "Monitor%d", &loc)
+	for _, mi := range s.monitorInfos {
+		if mi.Location == loc {
+			return mi.DevicePath
+		}
+	}
+	return ""
+}
+
+// anyMonitorWallpaper returns one currently-assigned wallpaper (preferring
+// Monitor0), used as the source when cloning, or nil if nothing is assigned.
+func (s *WSServer) anyMonitorWallpaper() *MonitorWallpaper {
+	if mw := s.state.Monitors["Monitor0"]; mw != nil {
+		return mw
+	}
+	for _, mw := range s.state.Monitors {
+		if mw != nil {
+			return mw
+		}
+	}
+	return nil
+}
+
+// cloneToAllOutputs assigns a copy of src to every output, each carrying its own
+// Monitor label and device path.
+func (s *WSServer) cloneToAllOutputs(src *MonitorWallpaper) {
+	for _, label := range s.allMonitorLabels() {
+		c := *src
+		c.Monitor = label
+		c.DevicePath = s.devicePathFor(label)
+		s.state.Monitors[label] = &c
+	}
+}
+
+// openConfigWindow launches the wepapered GTK configuration window (--config).
+// Triggered by the WE UI's Settings button (showSettingsDialog). GTK3 runs under
+// Wayland, so this can spawn from the daemon process directly.
+func (s *WSServer) openConfigWindow() {
+	exe, err := os.Executable()
+	if err != nil {
+		log.Printf("[wepapered] cannot find executable for config window: %v", err)
+		return
+	}
+	cmd := exec.Command(exe, "--config")
+	if err := cmd.Start(); err != nil {
+		log.Printf("[wepapered] failed to open config window: %v", err)
+		return
+	}
+	go cmd.Wait()
+	log.Printf("[WE] showSettingsDialog → opened wepapered config")
+}
+
+// onPersistBrowserSettings saves WE's browserSettings object (sent as a JSON
+// string) so UI preferences like "Show on start" survive restarts. Restored into
+// the UI by updateUIState in the inject shim.
+func (s *WSServer) onPersistBrowserSettings(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	var raw json.RawMessage
+	switch v := args[0].(type) {
+	case string:
+		raw = json.RawMessage(v)
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return
+		}
+		raw = b
+	}
+	if !json.Valid(raw) {
+		log.Printf("[WE] persistBrowserSettings: invalid JSON, ignored")
+		return
+	}
+	s.state.BrowserSettings = raw
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	log.Printf("[WE] browser settings persisted (%d bytes)", len(raw))
+}
+
+// onAcceptAndClose commits the current selections (OK button): persist state and
+// re-write WE's config, and adopt the current state as the new rollback baseline.
+func (s *WSServer) onAcceptAndClose() {
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	if err := writeWESelectedWallpapers(s.cfg.WEPath, s.state.Monitors, s.monitorInfos); err != nil {
+		log.Printf("[wepapered] WE config write error: %v", err)
+	}
+	s.sessionBaseline = s.state.snapshot()
+	log.Printf("[WE] acceptAndClose — settings saved")
+}
+
+// onCancelAndClose rolls back to the baseline captured when the browse UI opened
+// (Cancel button), re-rendering the original wallpapers. Best-effort: if no
+// baseline was captured, nothing changes.
+func (s *WSServer) onCancelAndClose() {
+	if s.sessionBaseline == nil {
+		log.Printf("[WE] cancelAndClose — no baseline, nothing to roll back")
+		return
+	}
+	restored := s.sessionBaseline.snapshot() // independent copy; keep baseline intact
+	s.state.Monitors = restored.Monitors
+	s.state.Layout = restored.Layout
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	if err := writeWESelectedWallpapers(s.cfg.WEPath, s.state.Monitors, s.monitorInfos); err != nil {
+		log.Printf("[wepapered] WE config write error: %v", err)
+	}
+	log.Printf("[WE] cancelAndClose — rolled back to baseline")
+	go s.renderer.Apply(s.state)
 }
 
 func (s *WSServer) handleSettings(conn *websocket.Conn, msg WEMessage) {
@@ -343,7 +590,13 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		mw.PreviewFile = meta.Preview
 	}
 
-	s.state.Monitors[monitor] = mw
+	// In clone mode the same wallpaper goes on every display; otherwise just the
+	// selected one.
+	if s.state.Layout == layoutClone {
+		s.cloneToAllOutputs(mw)
+	} else {
+		s.state.Monitors[monitor] = mw
+	}
 	if err := saveState(s.state); err != nil {
 		log.Printf("[wepapered] state save error: %v", err)
 	}
@@ -364,7 +617,7 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 // sendHostedUIData pushes the wallpaper library and the translation table to a
 // freshly connected client. Used by the hosted-UI mode (CEF window / probe).
 func (s *WSServer) sendHostedUIData(conn *websocket.Conn) {
-	lib := enumerateLibrary(s.cfg.WEPath)
+	lib := enumerateLibrary(s.cfg.WEPath, s.cfg.CustomDirs)
 	
 	sendLibrary := func(library []UIWallpaper) {
 		if data, err := json.Marshal(map[string]interface{}{

@@ -102,6 +102,13 @@ function updateUIState() {
 	var selectedWallpapers = {};
 	var loc = 0;
 
+	// Restore persisted browser settings (e.g. "Show on start" /
+	// showmonitorselectiononstart) BEFORE the monitor config is applied, since
+	// that is when the UI decides whether to auto-open the monitor selection.
+	if (val.browserSettings && state.browser_settings) {
+		try { Object.assign(val.browserSettings, state.browser_settings); } catch (e) {}
+	}
+
 	if (!val.steamWorkshopStatus) {
 		val.steamWorkshopStatus = { error: false, complete: true, hidden: true };
 	}
@@ -123,6 +130,37 @@ function updateUIState() {
 		val.getDisplayTags.__wepPatched = true;
 	}
 
+	// Build the "Choose display" list from the real displays the daemon pushed,
+	// so the picker is populated even before any wallpaper is assigned. Without
+	// this the list was derived from state.monitors (assigned wallpapers only),
+	// which is empty on a fresh setup -> no display selectable -> nothing applies.
+	var displays = window.daemonDisplays || [];
+	if (!displays.length) {
+		for (var sk in state.monitors) {
+			var sm = sk.match(/Monitor(\d+)/);
+			var sidx = sm ? parseInt(sm[1]) : 0;
+			displays.push({ index: sidx, location: sidx, name: sk });
+		}
+	}
+	for (var di = 0; di < displays.length; di++) {
+		var d = displays[di];
+		var didx = (typeof d.location === 'number') ? d.location : di;
+		monitorsArray.push({
+			index: didx,
+			location: didx,
+			name: d.name || ('Monitor' + didx),
+			deviceName: d.deviceName || d.name || ('Monitor' + didx),
+			devicePath: d.devicePath || ('Monitor' + didx),
+			isClone: false,
+			isInGroup: false,
+			x0: (typeof d.x0 === 'number') ? d.x0 : didx * 1920,
+			y0: (typeof d.y0 === 'number') ? d.y0 : 0,
+			x1: (typeof d.x1 === 'number') ? d.x1 : (didx + 1) * 1920,
+			y1: (typeof d.y1 === 'number') ? d.y1 : 1080
+		});
+	}
+
+	// Overlay any wallpapers already assigned in daemon state onto those displays.
 	for (var key in state.monitors) {
 		var m = state.monitors[key];
 		var match = key.match(/Monitor(\d+)/);
@@ -140,21 +178,11 @@ function updateUIState() {
 				title: key
 			};
 		}
-		
+
 		var wpClone = Object.assign({}, wp);
 		wpClone.properties = {};
 		wpClone.properties[key] = m.props || {};
-		
-		monitorsArray.push({
-			index: idx,
-			location: idx,
-			name: key,
-			x0: idx * 1920,
-			y0: 0,
-			x1: (idx + 1) * 1920,
-			y1: 1080
-		});
-		
+
 		selectedWallpapers[idx] = wpClone;
 		if (m.device_path) selectedWallpapers[m.device_path] = wpClone;
 		selectedWallpapers[key] = wpClone;
@@ -165,7 +193,7 @@ function updateUIState() {
 
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: 0 }, browser: { advertiseworkshop: false, advertiseexplore: false, advertisesendtomobile: false, defaultfilterconfig: { Anime: false } } },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: (state.layout || 0) }, browser: { advertiseworkshop: false, advertiseexplore: false, advertisesendtomobile: false, defaultfilterconfig: { Anime: false } } },
 		{},
 		false
 	);	
@@ -260,13 +288,38 @@ function applyWorkshopProgress(msg) {
 	} catch (e) {}
 }
 
+// showWepToast shows a transient error banner. Self-contained (inline styles, no
+// dependency on WE's Angular/dialog internals) so it works in any UI build.
+function showWepToast(text) {
+	try {
+		var t = document.createElement('div');
+		t.textContent = text;
+		t.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);' +
+			'z-index:2147483647;background:#c0392b;color:#fff;padding:12px 18px;' +
+			'border-radius:8px;font-size:14px;font-family:sans-serif;' +
+			'box-shadow:0 4px 16px rgba(0,0,0,.4);max-width:80vw;text-align:center;' +
+			'opacity:0;transition:opacity .2s';
+		document.body.appendChild(t);
+		requestAnimationFrame(function(){ t.style.opacity = '1'; });
+		setTimeout(function(){
+			t.style.opacity = '0';
+			setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 300);
+		}, 5000);
+	} catch (e) {}
+}
+
 window.__bridgeOnMessage = function(e) {
 	var msg = JSON.parse(e.data);
 	if (msg.type === 'state') {
 		window.daemonState = msg.state;
 		setTimeout(function() { updateUIState(); }, 100);
+	} else if (msg.type === 'displays') {
+		window.daemonDisplays = msg.displays || [];
+		setTimeout(function() { updateUIState(); }, 100);
 	} else if (msg.type === 'wsprogress') {
 		applyWorkshopProgress(msg);
+	} else if (msg.type === 'wserror') {
+		showWepToast(msg.message || 'Steam UGC unavailable.');
 	} else if (msg.type === 'library') {
 		if (window.browseWallpapersCtrl) {
 			if (window.browseWallpapersCtrl.setListSource) {
@@ -448,6 +501,12 @@ BRIDGE_OBJECTS.forEach(function(name) {
 							args: args,
 							callback: String(prop) + 'Callback'
 						});
+						// OK / Cancel both close the window; the daemon does the
+						// save (accept) or rollback (cancel) on its side.
+						if (name === 'browseWallpaperObject' && (prop === 'acceptAndClose' || prop === 'cancelAndClose')) {
+							if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.host) window.webkit.messageHandlers.host.postMessage('close');
+							else if (window.close) window.close();
+						}
 					};
 				}
 			}),

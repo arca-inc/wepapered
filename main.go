@@ -12,7 +12,9 @@ import (
 )
 
 func main() {
-	ui := flag.Bool("ui", false, "open config window")
+	config := flag.Bool("config", false, "open the configuration window")
+	ui := flag.Bool("ui", false, "alias for --config (deprecated)")
+	gui := flag.Bool("gui", false, "open the native WE browse window (starts the daemon if needed)")
 	dumpLib := flag.Bool("dump-library", false, "print the enumerated wallpaper library as JSON and exit")
 	flag.Parse()
 
@@ -22,13 +24,18 @@ func main() {
 		cfg = &Config{}
 	}
 
-	if *ui {
+	if *config || *ui {
 		runConfigUI(cfg)
 		return
 	}
 
+	if *gui {
+		runGUI(cfg)
+		return
+	}
+
 	if *dumpLib {
-		lib := enumerateLibrary(resolveWEPath(cfg))
+		lib := enumerateLibrary(resolveWEPath(cfg), cfg.CustomDirs)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		enc.Encode(lib) //nolint

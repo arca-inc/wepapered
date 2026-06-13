@@ -2,7 +2,7 @@ package main
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/lwe/src
-#cgo LDFLAGS: -L${SRCDIR}/lwe/build/output -llinux-wallpaperengine-lib -Wl,-rpath,$ORIGIN
+#cgo LDFLAGS: -L${SRCDIR}/lwe/build/output -llinux-wallpaperengine-lib -Wl,-rpath,$ORIGIN -Wl,-rpath,${SRCDIR}/lwe/build/output
 #include "lwe_bridge.h"
 #include <stdlib.h>
 */
@@ -25,8 +25,12 @@ var lweOutputDir = func() string {
 		if _, err := os.Stat(filepath.Join(dir, "linux-wallpaperengine")); err == nil {
 			return dir
 		}
+		// Development default: submodule build output next to the executable.
+		if _, err := os.Stat(filepath.Join(dir, "lwe/build/output", "linux-wallpaperengine")); err == nil {
+			return filepath.Join(dir, "lwe/build/output")
+		}
 	}
-	// Development default: submodule build output.
+	// Fallback.
 	return filepath.Join(os.Getenv("HOME"), "wepapered/lwe/build/output")
 }()
 

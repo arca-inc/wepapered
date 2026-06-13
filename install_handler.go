@@ -46,11 +46,23 @@ func (s *WSServer) handleUI(conn *websocket.Conn, msg WEMessage) {
 				})
 			},
 			func(id string) {
-				notifyUser(fmt.Sprintf("Wallpaper téléchargé (%s)", id))
+				notifyUser(fmt.Sprintf("Wallpaper downloaded (%s)", id))
 				s.Broadcast(map[string]interface{}{
 					"type": "wsprogress", "workshopid": id,
 					"status": "installed", "percent": 100.0, "label": "",
 				})
+			},
+			func(reason string) {
+				log.Printf("[steam-ugc] download failed: %s", reason)
+				notifyUser(reason)
+				// Tell the UI to show the error and clear the stuck download rings.
+				s.Broadcast(map[string]interface{}{"type": "wserror", "message": reason})
+				for _, id := range ids {
+					s.Broadcast(map[string]interface{}{
+						"type": "wsprogress", "workshopid": id,
+						"status": "downloadable", "percent": 0.0, "label": "",
+					})
+				}
 			})
 		if !ok {
 			for _, id := range ids {

@@ -49,7 +49,7 @@ func isWorkshopInstalled(wePath, id string) bool {
 // (~0.8s) compared with the native client, multiple queries are in flight at
 // once: by the time an early response arrives, the slot points at a later
 // request, the token no longer matches, and the UI re-queries — an endless
-// loop ("En attente d'une réponse de Steam…"). Coalescing a burst into a single
+// loop ("Waiting for a response from Steam…"). Coalescing a burst into a single
 // query for the *latest* request means the response token matches the slot the
 // UI is actually waiting on, so it's accepted and the loop never starts.
 func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
@@ -227,7 +227,7 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 
 	// The browse controller's success handler (r in scripts.js) rejects the
 	// result unless e.token === i.token, falling back to an endless re-query
-	// (the "En attente d'une réponse de Steam…" spinner). Echo the request token
+	// (the "Waiting for a response from Steam…" spinner). Echo the request token
 	// and supply pagecount, which it feeds to updatePagination.
 	pageCount := page + 1 // assume there's a next page…
 	if len(results) < numPerPage {

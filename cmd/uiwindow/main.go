@@ -18,6 +18,13 @@ static void load_changed(WebKitWebView *wv, WebKitLoadEvent ev, gpointer d) {
     }
 }
 
+// Suppress WebKit's native context menu — WE draws its own on the DOM
+// contextmenu event, which still fires. Returning TRUE cancels the default menu.
+static gboolean on_context_menu(WebKitWebView *wv, WebKitContextMenu *menu,
+                                GdkEvent *event, WebKitHitTestResult *hit, gpointer d) {
+    return TRUE;
+}
+
 static void on_script_message(WebKitUserContentManager *m, WebKitJavascriptResult *r, gpointer p) {
     GtkWindow *win = GTK_WINDOW(p);
     JSCValue *value = webkit_javascript_result_get_js_value(r);
@@ -80,6 +87,7 @@ void run_ui_window(const char *url, int width, int height) {
 
     g_signal_connect(win, "destroy", G_CALLBACK(on_destroy), NULL);
     g_signal_connect(wv, "load-changed", G_CALLBACK(load_changed), win);
+    g_signal_connect(wv, "context-menu", G_CALLBACK(on_context_menu), NULL);
 
     webkit_web_view_load_uri(wv, url);
 
@@ -101,7 +109,7 @@ func main() {
 	os.Unsetenv("WAYLAND_DISPLAY")
 	os.Setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
 
-	url := "http://localhost:9001/ui/index.html?skinStyle=styles/main.css&skinKey=default&cb=1#/browsewallpapers"
+	url := "http://localhost:9001/ui/index.html?skinStyle=styles/skindark.css&skinKey=skindark&cb=1#/browsewallpapers"
 	if len(os.Args) > 1 {
 		url = os.Args[1]
 	}
