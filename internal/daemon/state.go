@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"encoding/json"
@@ -155,7 +155,6 @@ func readProjectMeta(linuxPath string) *ProjectJSON {
 	if p.Type == "" {
 		p.Type = inferTypeFromDir(dir)
 	}
-	p.Type = p.Type
 	return &p
 }
 

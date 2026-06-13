@@ -1,4 +1,9 @@
-package main
+// Package core holds the pure-Go state shared by every wepapered binary: the
+// on-disk config, Wallpaper Engine path resolution, companion-binary location,
+// and the browse-UI URL. It links no CGo and pulls no heavy dependencies, so the
+// daemon (LWE), the GTK settings window, the WebKit browse window, and the ctl
+// dispatcher can all import it without dragging in each other's native libraries.
+package core
 
 import (
 	"encoding/json"
@@ -26,13 +31,13 @@ type Config struct {
 	PlaceholderBackend string `json:"placeholder_backend"`
 }
 
-func configPath() string {
+func ConfigPath() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "wepapered", "config.json")
 }
 
-func loadConfig() (*Config, error) {
-	data, err := os.ReadFile(configPath())
+func LoadConfig() (*Config, error) {
+	data, err := os.ReadFile(ConfigPath())
 	if err != nil {
 		return &Config{}, nil
 	}
@@ -43,8 +48,8 @@ func loadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-func saveConfig(cfg *Config) error {
-	path := configPath()
+func SaveConfig(cfg *Config) error {
+	path := ConfigPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
@@ -55,8 +60,8 @@ func saveConfig(cfg *Config) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// weDirValid reports whether p looks like a real Wallpaper Engine install.
-func weDirValid(p string) bool {
+// WeDirValid reports whether p looks like a real Wallpaper Engine install.
+func WeDirValid(p string) bool {
 	if p == "" {
 		return false
 	}
@@ -64,17 +69,17 @@ func weDirValid(p string) bool {
 	return err == nil
 }
 
-// resolveWEPath returns the configured path if it is a valid WE install,
+// ResolveWEPath returns the configured path if it is a valid WE install,
 // otherwise falls back to auto-detection. Returns "" if nothing is found.
-func resolveWEPath(cfg *Config) string {
-	if weDirValid(cfg.WEPath) {
+func ResolveWEPath(cfg *Config) string {
+	if WeDirValid(cfg.WEPath) {
 		return cfg.WEPath
 	}
-	return autoDetectWEPath()
+	return AutoDetectWEPath()
 }
 
-// autoDetectWEPath checks common Steam installation locations.
-func autoDetectWEPath() string {
+// AutoDetectWEPath checks common Steam installation locations.
+func AutoDetectWEPath() string {
 	home, _ := os.UserHomeDir()
 	candidates := []string{
 		filepath.Join(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/wallpaper_engine"),

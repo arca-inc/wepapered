@@ -6,7 +6,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/wepapered
+ExecStart=%h/.local/bin/wepapered-daemon
 Restart=on-failure
 RestartSec=5s
 

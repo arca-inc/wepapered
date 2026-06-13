@@ -1,12 +1,17 @@
+// wepapered-settings — the GTK3 configuration window. Edits the shared config
+// (WE path, Steam API key, UI theme, loading backend, custom dirs). Links gotk3
+// only; no LWE, no webkit.
 package main
 
 import (
 	"github.com/gotk3/gotk3/gtk"
+
+	"wepapered/internal/core"
 )
 
 // guiSkins lists the selectable WE UI themes as {value, label}. The value is the
-// stylesheet base name under ui/dist/styles (see guiURL); the label is shown in
-// the config dropdown.
+// stylesheet base name under ui/dist/styles (see core.GUIURL); the label is shown
+// in the config dropdown.
 var guiSkins = []struct{ Value, Label string }{
 	{"skindark", "Dark (default)"},
 	{"skinobsidian", "Obsidian"},
@@ -21,7 +26,12 @@ var guiSkins = []struct{ Value, Label string }{
 	{"main", "Light"},
 }
 
-func runConfigUI(cfg *Config) {
+func main() {
+	cfg, _ := core.LoadConfig()
+	runConfigUI(cfg)
+}
+
+func runConfigUI(cfg *core.Config) {
 	gtk.Init(nil)
 
 	win, _ := gtk.WindowNew(gtk.WINDOW_TOPLEVEL)
@@ -50,7 +60,7 @@ func runConfigUI(cfg *Config) {
 
 	detectBtn, _ := gtk.ButtonNewWithLabel("Auto-detect")
 	detectBtn.Connect("clicked", func() {
-		if p := autoDetectWEPath(); p != "" {
+		if p := core.AutoDetectWEPath(); p != "" {
 			entry.SetText(p)
 		} else {
 			entry.SetText("")
@@ -208,7 +218,7 @@ func runConfigUI(cfg *Config) {
 		cfg.PlaceholderBackend = phText
 		cfg.CustomDirs = dirs
 
-		if err := saveConfig(cfg); err != nil {
+		if err := core.SaveConfig(cfg); err != nil {
 			statusLabel.SetMarkup("<span foreground='red'>Save error</span>")
 		} else {
 			gtk.MainQuit()

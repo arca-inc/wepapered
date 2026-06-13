@@ -1,6 +1,7 @@
-// wepapered-ui — lightweight WebKitGTK window for the WE browse UI.
-// Feels like an Electron app: no address bar, no tabs, just the content.
-// Built directly on webkit2gtk-4.1 + GTK3, zero extra Go dependencies.
+// wepapered-gui — lightweight WebKitGTK window for the WE browse UI.
+// Feels like an Electron app: no address bar, no tabs, just the content. Built
+// directly on webkit2gtk-4.1 + GTK3; ensures the daemon is up, then opens the
+// browse UI it serves. Links no LWE/GTK-settings code, only webkit + internal/core.
 
 package main
 
@@ -99,6 +100,8 @@ import "C"
 import (
 	"os"
 	"unsafe"
+
+	"wepapered/internal/core"
 )
 
 func main() {
@@ -109,9 +112,13 @@ func main() {
 	os.Unsetenv("WAYLAND_DISPLAY")
 	os.Setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
 
-	url := "http://localhost:9001/ui/index.html?skinStyle=styles/skindark.css&skinKey=skindark&cb=1#/browsewallpapers"
+	// The window is useless without the daemon's WS server — ensure it's running.
+	ensureDaemon()
+
+	cfg, _ := core.LoadConfig()
+	url := core.GUIURL(cfg)
 	if len(os.Args) > 1 {
-		url = os.Args[1]
+		url = os.Args[1] // explicit URL override, for debugging
 	}
 
 	curl := C.CString(url)

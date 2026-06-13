@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"encoding/json"
@@ -11,10 +11,10 @@ import (
 	"fyne.io/systray"
 )
 
-func main() {
-	config := flag.Bool("config", false, "open the configuration window")
-	ui := flag.Bool("ui", false, "alias for --config (deprecated)")
-	gui := flag.Bool("gui", false, "open the native WE browse window (starts the daemon if needed)")
+// Run is the wepapered daemon entry point. It wires up WSServer → Renderer →
+// Watcher, applies saved state on startup, serves the browse UI, runs the tray,
+// and blocks until the tray quits or a termination signal arrives.
+func Run() {
 	dumpLib := flag.Bool("dump-library", false, "print the enumerated wallpaper library as JSON and exit")
 	flag.Parse()
 
@@ -22,16 +22,6 @@ func main() {
 	if err != nil {
 		log.Printf("config load error: %v, using defaults", err)
 		cfg = &Config{}
-	}
-
-	if *config || *ui {
-		runConfigUI(cfg)
-		return
-	}
-
-	if *gui {
-		runGUI(cfg)
-		return
 	}
 
 	if *dumpLib {
@@ -42,13 +32,13 @@ func main() {
 		return
 	}
 
-	// Daemon mode — resolve (and repair) the WE path: auto-detect if the
-	// configured one is empty or no longer points at a real install (e.g. a
-	// stale Flatpak path after switching to a native Steam, or a fresh install).
+	// Resolve (and repair) the WE path: auto-detect if the configured one is
+	// empty or no longer points at a real install (e.g. a stale Flatpak path
+	// after switching to a native Steam, or a fresh install).
 	if !weDirValid(cfg.WEPath) {
 		resolved := resolveWEPath(cfg)
 		if resolved == "" {
-			log.Fatal("Wallpaper Engine path not found. Run `wepapered --ui` to configure.")
+			log.Fatal("Wallpaper Engine path not found. Run `wepapered-settings` to configure.")
 		}
 		if resolved != cfg.WEPath {
 			log.Printf("WE path %q invalid; auto-detected %q", cfg.WEPath, resolved)
@@ -59,12 +49,17 @@ func main() {
 		}
 	}
 
+	// Bind the control port FIRST as a single-instance gate. If another daemon
+	// already owns it, exit now — before touching renderers — so we never end up
+	// with two daemons fighting over the same outputs (which crash-loops LWE).
+	ws := newWSServer(cfg)
+	if err := ws.Start("127.0.0.1:9001"); err != nil {
+		log.Fatalf("[wepapered] a daemon is already running (127.0.0.1:9001 in use); not starting a second. (%v)", err)
+	}
+
 	// Clean up any renderers orphaned by a previous instance that didn't shut
 	// down cleanly, so we don't end up with duplicate processes per output.
 	killStrayRenderers()
-
-	ws := newWSServer(cfg)
-	ws.Start("127.0.0.1:9001")
 
 	// Discord Rich Presence (optional; connects in the background when Discord runs).
 	go ws.discord.Run()
@@ -94,17 +89,17 @@ func main() {
 	}
 
 	tray := newTrayManager(cfg)
-	
+
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	
+
 	go func() {
 		<-sig
 		log.Println("[wepapered] signal received, stopping")
 		systray.Quit()
 	}()
 
-	// tray.Run() blocks the main thread
+	// tray.Run() blocks the main thread.
 	tray.Run()
 
 	log.Println("[wepapered] stopping")

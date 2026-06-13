@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"encoding/json"
@@ -516,7 +516,7 @@ func (r *Renderer) Apply(state *DaemonState) {
 		hwDoneCh := make(chan struct{})
 		allReadyChs = append(allReadyChs, hwDoneCh)
 
-		hwSp, hwNewBg, hwPresetDir, hwProps, hwOut, hwTyp := hw.sp, hw.newBg, hw.presetDir, hw.props, hw.output, hw.sp.typ
+		hwSp, hwNewBg, hwPresetDir, hwProps, hwOut, hwTyp, hwNewTyp := hw.sp, hw.newBg, hw.presetDir, hw.props, hw.output, hw.sp.typ, hw.newTyp
 
 		go func() {
 			defer close(hwDoneCh)
@@ -540,7 +540,7 @@ func (r *Renderer) Apply(state *DaemonState) {
 			r.mu.Lock()
 			newSp := r.launchScreenLocked(hwOut, hwNewBg, hwPresetDir, hwProps, capturedAssetsDir)
 			if newSp != nil {
-				newSp.typ = hw.newTyp
+				newSp.typ = hwNewTyp
 				r.screens[hwOut] = newSp
 				if !oldIsWeb {
 					hwSp.hotswapping = false

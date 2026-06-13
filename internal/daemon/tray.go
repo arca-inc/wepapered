@@ -1,4 +1,4 @@
-package main
+package daemon
 
 import (
 	"log"
@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 
 	"fyne.io/systray"
+
+	"wepapered/internal/core"
 )
 
 type TrayManager struct {
@@ -22,7 +24,7 @@ func (t *TrayManager) Run() {
 }
 
 func (t *TrayManager) onReady() {
-	// Try to load WE icon
+	// Try to load the WE icon.
 	iconPath := filepath.Join(t.cfg.WEPath, "ui", "dist", "favicon.ico")
 	if iconData, err := os.ReadFile(iconPath); err == nil {
 		systray.SetIcon(iconData)
@@ -51,44 +53,39 @@ func (t *TrayManager) onReady() {
 	}()
 }
 
+// openWEBrowser launches the wepapered-gui WebKit window. The daemon is already
+// running (the tray lives in it), so the window connects straight to it.
 func (t *TrayManager) openWEBrowser() {
-	// Use the wepapered-ui companion binary: a frameless WebKitGTK window,
-	// no browser chrome, no address bar — Electron-like feel. The daemon is
-	// already running (the tray lives in it), so just open the window.
-	url := guiURL(t.cfg)
-	bin := findCompanion()
-	if bin == "" {
-		// Fallback to a browser if the companion binary isn't shipped alongside.
-		exec.Command("xdg-open", url).Start() //nolint
+	if bin := core.SiblingBinary(core.GUIBinary); bin != "" {
+		t.launch(bin)
 		return
 	}
-	cmd := exec.Command(bin, url)
+	// Fallback to a browser if the gui binary isn't shipped alongside.
+	exec.Command("xdg-open", core.GUIURL(t.cfg)).Start() //nolint
+}
+
+// openConfigUI launches the wepapered-settings GTK window.
+func (t *TrayManager) openConfigUI() {
+	if bin := core.SiblingBinary(core.SettingsBinary); bin != "" {
+		t.launch(bin)
+	} else {
+		log.Printf("[wepapered] settings binary (%s) not found", core.SettingsBinary)
+	}
+}
+
+func (t *TrayManager) launch(bin string, args ...string) {
+	cmd := exec.Command(bin, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		log.Printf("[wepapered] Failed to open WE browser UI: %v", err)
-	} else {
-		go cmd.Wait()
-	}
-}
-
-func (t *TrayManager) openConfigUI() {
-	// WePapered GTK configuration UI is triggered by running the binary with --ui
-	exe, err := os.Executable()
-	if err != nil {
-		log.Printf("[wepapered] Could not find own executable: %v", err)
+		log.Printf("[wepapered] failed to launch %s: %v", filepath.Base(bin), err)
 		return
 	}
-	cmd := exec.Command(exe, "--config")
-	if err := cmd.Start(); err != nil {
-		log.Printf("[wepapered] Failed to start config UI: %v", err)
-	} else {
-		go cmd.Wait()
-	}
+	go cmd.Wait()
 }
 
 func (t *TrayManager) onExit() {
-	// Signal main.go to stop everything
+	// Signal Run() to stop everything.
 	log.Println("[wepapered] Quit requested from systray")
 	os.Exit(0)
 }

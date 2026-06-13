@@ -21,39 +21,54 @@ cd lwe && mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make                       # produces liblinux-wallpaperengine-lib.so, linux-wallpaperengine, lwe-cef-subprocess
 
-# 3. Build the daemon (CGo cflags/ldflags in lwe.go point at lwe/build/output)
-cd /home/warmadon/wepapered
-go build -o wepapered .
+# 3. Build the four binaries into ./bin (CGo cflags/ldflags in
+#    internal/daemon/lwe.go point at lwe/build/output).
+cd /home/davidutz/personal/wepapered
+make                   # → bin/{wepapered-daemon,wepapered-gui,wepapered-settings,wepaperedctl}
 
-# Run
-./wepapered            # daemon mode
-./wepapered --ui       # GTK3 config window to set the WE install path
+# Run directly, or via the dispatcher: `bin/wepaperedctl <daemon|gui|settings>`
+./bin/wepapered-daemon     # the background daemon (renders wallpapers, serves the UI)
+./bin/wepapered-gui        # WebKit browse window (starts the daemon if none is running)
+./bin/wepapered-settings   # GTK3 settings window (WE path, API key, theme, custom dirs)
 ```
 
-There is **no test suite, linter config, or CI** in this repo. `go build ./...` / `go vet ./...` are the available checks.
+There is **no test suite or linter config** in this repo; `.github/workflows/build.yml` builds the binaries on push. `make vet` (`go vet ./...`) and `go build ./...` are the local checks.
 
 Runtime requirements: must run as the **session user** (not root — embedded LWE/CEF cannot reach Wayland as root; the code has fallbacks using `sudo -u`/`SUDO_USER` but the normal path is the logged-in user). Hyprland must be running (`hyprctl` is shelled out to). `hyprpaper` is used for loading placeholders.
 
 ## Key paths & environment
 
-- WE install path: stored in `~/.config/wepapered/config.json`; auto-detected from common Steam locations (`config.go:autoDetectWEPath`).
-- Daemon state (active wallpaper per monitor): `~/.config/wepapered/state.json` (`state.go`).
-- WebSocket server: `127.0.0.1:9001`, path `/we` (`wsserver.go`). The WE UI must be injected with a JS spy that connects here — that injection lives in the patched WE/LWE side, not this repo.
-- `LWE_OUTPUT_DIR` env var overrides where the LWE binaries are found (`lwe.go`); defaults to `lwe/build/output` in dev, or the dir next to the `wepapered` executable when packaged.
+- WE install path: stored in `~/.config/wepapered/config.json`; auto-detected from common Steam locations (`internal/core/config.go:AutoDetectWEPath`).
+- Daemon state (active wallpaper per monitor): `~/.config/wepapered/state.json` (`internal/daemon/state.go`).
+- WebSocket server: `127.0.0.1:9001`, path `/we` (`internal/daemon/wsserver.go`). The WE UI must be injected with a JS spy that connects here — that injection lives in the patched WE/LWE side, not this repo.
+- `LWE_OUTPUT_DIR` env var overrides where the LWE binaries are found (`internal/core/paths.go`); defaults to `lwe/build/output` in dev, or the dir next to the running executable when packaged.
 - Per-screen IPC sockets: `/tmp/wepapered-ctrl-<output>.sock`. Loading placeholder image: `/tmp/wepapered-loading.png`.
 
 ## Architecture
 
-Single `main` package; each file is one subsystem:
+Four binaries built from one module, split along their native-dependency lines so
+each links only what it needs (verified: `wepapered-gui` cannot pull in the LWE
+renderer, which is what made the old single-binary `--gui` spawn a second daemon):
 
-- **`main.go`** — entry point. Daemon mode wires up `WSServer` → `Renderer` → `Watcher`, applies saved state on startup, and runs the watchdog loop that drains `renderer.applyTrigger`.
+- **`cmd/wepapered-daemon`** → `internal/daemon` (links the LWE library) — the background service.
+- **`cmd/wepapered-gui`** (links webkit2gtk) — the WebKit browse window; ensures the daemon is up, then opens the UI it serves.
+- **`cmd/wepapered-settings`** (links gotk3) — the GTK3 settings window.
+- **`cmd/wepaperedctl`** — a tiny dispatcher that execs the binary for `daemon`/`gui`/`settings`.
+- **`internal/core`** — pure-Go shared state (config, WE-path resolution, LWE/companion-binary paths, browse-UI URL). Links no CGo, so gui/settings/ctl import it without dragging in the LWE library.
+
+The daemon's subsystems live in `internal/daemon`, one file each. `aliases.go`
+re-exports the `core` symbols under their original unqualified names (`Config`,
+`loadConfig`, `lwebin`, …) so the files below read as they did pre-split:
+
+- **`run.go`** — daemon entry point (`daemon.Run`). Binds the control port as a single-instance gate, wires up `WSServer` → `Renderer` → `Watcher`, applies saved state on startup, and runs the watchdog loop that drains `renderer.applyTrigger`.
 - **`wsserver.go`** — WebSocket server that the WE UI's JS spy connects to. Parses intercepted WE method calls (`browseWallpaperObject.selectWallpaper`, `settingsObject.applyGeneral`). On a selection it resolves metadata, updates state, persists back to WE config, fires a desktop notification, and triggers `renderer.Apply`.
 - **`state.go`** — `DaemonState` / `MonitorWallpaper` models, JSON persistence, Windows↔Linux path translation (`winToLinux`: `S:` = steamapps root, `Z:` = Linux root via Wine), `project.json` parsing, and wallpaper **type inference**. Crucial concept: a wallpaper may be a thin "preset" that depends on a separate framework workshop item (`dependency` field) — in that case `RenderDir` points at the framework (HTML/JS) and `PresetDir` at the original wallpaper's assets, with `Props` carrying preset overrides.
 - **`renderer.go`** — the heart of the project. Runs **one `linux-wallpaperengine` subprocess per Wayland output**, keyed by output name. `Apply(state)` diffs desired-vs-running and decides per screen: start, stop, or **hot-swap**. Monitor labels `Monitor0/1/…` map to outputs sorted left-to-right by x,y from `hyprctl monitors`.
 - **`watcher.go`** — fsnotify watch on WE's `config.json`; when WE clears `selectedwallpapers`, debounce-rewrites our state back into it so WE doesn't win the fight.
 - **`weconfig.go`** — writing `selectedwallpapers` back into WE's `config.json`, keyed by Windows device path (from `monitormap`) with `MonitorN` fallback.
-- **`lwe.go`** — CGo bridge to `liblinux-wallpaperengine-lib.so`. Note: the embedded `lwe_run` path is **legacy/unused for rendering** — the renderer launches the `linux-wallpaperengine` *binary* as subprocesses instead. CGo is still used for `lwe_set_subprocess_path`.
-- **`ui.go`** — GTK3 config window (`--ui`). UI strings are in French.
+- **`lwe.go`** — CGo bridge to `liblinux-wallpaperengine-lib.so` (the `#cgo` include/lib paths are `../../lwe` relative to `internal/daemon`). Note: the embedded `lwe_run` path is **legacy/unused for rendering** — the renderer launches the `linux-wallpaperengine` *binary* as subprocesses instead. CGo is still used for `lwe_set_subprocess_path`.
+
+The GTK3 settings window lives separately in **`cmd/wepapered-settings/main.go`** (it links gotk3, not LWE). The error-wallpaper page it has nothing to do with is in the daemon (`errorWallpaperDir`, French string "Wallpaper non supporté").
 
 ### Rendering model (the hard part)
 

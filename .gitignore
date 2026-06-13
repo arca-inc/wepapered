@@ -1,4 +1,14 @@
-wepapered
+# Build output
+/bin/
+
+# Stray binaries if built without the Makefile (and legacy pre-split artifacts)
+/wepapered
+/wepapered-ui
+/wepapered-daemon
+/wepapered-gui
+/wepapered-settings
+/wepaperedctl
+
 /tmp/
 *.o
 *.a

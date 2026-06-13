@@ -1,9 +1,10 @@
-package main
+package daemon
 
 import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -71,7 +72,7 @@ func (s *WSServer) updateDiscordPresence() {
 	s.discord.SetActivity("Patched for Linux", "")
 }
 
-func (s *WSServer) Start(addr string) {
+func (s *WSServer) Start(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/we", s.handle)
 	mux.HandleFunc("/ui/", s.serveUI)
@@ -124,12 +125,19 @@ func (s *WSServer) Start(addr string) {
 		}
 		http.ServeFile(w, r, p)
 	})
+	// Bind synchronously so the caller can detect "port already in use" (another
+	// instance) and refuse to start a second, competing daemon.
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
 	go func() {
 		log.Printf("[wepapered] WS server on %s", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
+		if err := http.Serve(ln, mux); err != nil {
 			log.Printf("[wepapered] WS error: %v", err)
 		}
 	}()
+	return nil
 }
 
 func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
