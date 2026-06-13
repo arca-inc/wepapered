@@ -109,6 +109,8 @@ jobs:
           rm -f dist/wepapered/*-float dist/wepapered/spirv-remap \
                 dist/wepapered/glslangValidator dist/wepapered/glslang \
                 dist/wepapered/spirv-cross
+          # Ship the install guide inside the archive too.
+          cp packaging/RELEASE.md dist/wepapered/INSTALL.md
 
           # Resolve colocated deps via $ORIGIN — but ONLY for the daemon, the LWE
           # binaries and the bundled libs. wepapered-gui/settings deliberately keep
@@ -154,10 +156,12 @@ jobs:
           tag_name: latest
           name: Latest build
           prerelease: true
+          body_path: packaging/RELEASE.md
           files: wepapered-linux-amd64.tar.gz
 
       - name: Publish versioned release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: packaging/RELEASE.md
           files: wepapered-linux-amd64.tar.gz
