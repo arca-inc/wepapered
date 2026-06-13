@@ -77,10 +77,17 @@ jobs:
           # (e.g. Gentoo FFmpeg 7), so without this the engine can't load.
           #
           # libmpv is bundled too, so it uses the SAME bundled ffmpeg as the engine
-          # (two ffmpeg majors in one process would clash). The graphics/display and
-          # core system stack is intentionally KEPT on the host — bundling GL
-          # drivers, wayland/X, glibc, gtk/webkit, nss or audio breaks portability.
-          EXCLUDE='^(ld-linux|libc\.|libm\.|libdl\.|libpthread|librt\.|libresolv|libutil\.|libstdc\+\+|libgcc_s|libGL|libEGL|libGLES|libOpenGL|libglapi|libgbm|libdrm|libwayland|libxkbcommon|libX|libxcb|libICE|libSM|libdbus|libsystemd|libudev|libselinux|libcap|libgio-2|libglib-2|libgobject|libgmodule|libgthread|libgtk-|libgdk|libwebkit2gtk|libjavascriptcoregtk|libpango|libcairo|libgdk_pixbuf|libatk|libepoxy|libfontconfig|libfreetype|libharfbuzz|libfribidi|libthai|libdatrie|libgraphite2|libasound|libpulse|libnss|libnspr|libplc|libplds|libsmime|libva|libvdpau|libz\.|libbz2|liblzma|libzstd|libcrypto|libssl|libgnutls|libp11-kit|libtasn1|libidn2|libunistring|libffi|libpcre|libmount|libblkid|libuuid|libgcrypt|libgpg-error)'
+          # (two ffmpeg majors in one process would clash).
+          #
+          # CRITICAL: keep the universally-present base stack on the HOST, never
+          # bundle it. These libs (a) exist on every desktop and (b) are also used
+          # by kept-host libs, so a bundled (older, ubuntu) copy loaded via $ORIGIN
+          # would "back-feed" a host lib that needs a newer symbol and crash — e.g.
+          # host libgnutls needing nettle_rsa_oaep_sha384_decrypt (HOGWEED_6) from a
+          # bundled libhogweed that lacks it. Host versions are newer supersets, so
+          # the bundled ffmpeg/mpv link against them fine. We bundle ONLY the media
+          # codec tail (ffmpeg, mpv, codecs) plus leaf libs the host may lack.
+          EXCLUDE='^(ld-linux|libc\.|libm\.|libdl\.|libpthread|librt\.|libresolv|libutil\.|libnsl|libanl|libstdc\+\+|libgcc_s|libgomp|libGL|libEGL|libGLES|libOpenGL|libGLX|libGLdispatch|libglapi|libgbm|libdrm|libvulkan|libwayland|libxkbcommon|libX|libxcb|libICE|libSM|libxshmfence|libglib-2|libgio-2|libgobject|libgmodule|libgthread|libgtk-|libgdk|libgdk_pixbuf|libatk|libpango|libcairo|libpixman|libepoxy|libwebkit2gtk|libjavascriptcoregtk|libharfbuzz|libfribidi|libthai|libdatrie|libgraphite2|libfreetype|libfontconfig|libexpat|libpng|libjpeg|libturbojpeg|libtiff|libwebp|libsharpyuv|libssl|libcrypto|libgnutls|libnettle|libhogweed|libgmp|libgcrypt|libgpg-error|libp11-kit|libtasn1|libidn2|libunistring|libz\.|libbz2|liblzma|libzstd|liblz4|libbrotlicommon|libbrotlidec|libbrotlienc|libdbus|libsystemd|libudev|libselinux|libcap|libmount|libblkid|libuuid|libffi|libpcre|libsqlite3|libicudata|libicuuc|libicui18n|libxml2|libasound|libpulse|libpipewire|libjack|libnss|libnspr|libplc|libplds|libsmime|libva|libvdpau)'
 
           # Resolve the closure with the in-bundle libs visible (so only the
           # remaining => /usr/... system libs are candidates to bundle).
@@ -98,10 +105,21 @@ jobs:
             echo "bundled: $base"
           done <<< "$closure"
 
-          # Self-contain: every ELF resolves its colocated deps via $ORIGIN.
-          for f in dist/wepapered/*; do
+          # Drop build-only tools that slipped in from the LWE output dir.
+          rm -f dist/wepapered/*-float dist/wepapered/spirv-remap \
+                dist/wepapered/glslangValidator dist/wepapered/glslang \
+                dist/wepapered/spirv-cross
+
+          # Resolve colocated deps via $ORIGIN — but ONLY for the daemon, the LWE
+          # binaries and the bundled libs. wepapered-gui/settings deliberately keep
+          # the default search path so they use the HOST gtk/webkit stack (giving
+          # them $ORIGIN would back-feed bundled base libs into system webkit).
+          for f in dist/wepapered/wepapered-daemon \
+                   dist/wepapered/linux-wallpaperengine \
+                   dist/wepapered/lwe-cef-subprocess \
+                   dist/wepapered/*.so dist/wepapered/*.so.*; do
             [ -f "$f" ] || continue
-            if file "$f" | grep -q ELF; then patchelf --set-rpath '$ORIGIN' "$f" || true; fi
+            patchelf --set-rpath '$ORIGIN' "$f" || true
           done
 
           tar -czf wepapered-linux-amd64.tar.gz -C dist wepapered
