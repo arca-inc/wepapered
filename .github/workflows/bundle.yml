@@ -1,0 +1,105 @@
+name: Bundle release
+
+# Build all four wepapered binaries (including the daemon, which links the
+# private LWE library) and publish a single installable bundle: daemon + gui +
+# settings + ctl colocated with the LWE runtime (libcef, engine, resources).
+#
+# The daemon needs the private arca-inc/lwe-patched repo for its headers
+# (lwe/src) and prebuilt output (downloaded from lwe's `latest` release), so a
+# PAT with read access to lwe-patched must be stored as the LWE_ACCESS_TOKEN
+# secret. The default GITHUB_TOKEN cannot read another private repo.
+on:
+  push:
+    branches: [ master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    steps:
+      # Use the PAT so the private lwe submodule (for headers) clones too.
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          token: ${{ secrets.LWE_ACCESS_TOKEN || github.token }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev libwebkit2gtk-4.1-dev patchelf file \
+            libmpv2 libsdl2-2.0-0 libglew2.2 libglfw3 freeglut3-dev libglu1-mesa-dev \
+            libavcodec60 libavformat60 libavutil58 libswscale7 \
+            libpulse0 liblz4-1 libfftw3-double3 libfreetype6 \
+            libnss3 libnspr4
+
+      # Pull the prebuilt LWE runtime from lwe's rolling `latest` release into
+      # lwe/build/output (the daemon's cgo LDFLAGS point there).
+      - name: Fetch prebuilt LWE output
+        env:
+          GH_TOKEN: ${{ secrets.LWE_ACCESS_TOKEN }}
+        run: |
+          gh release download latest -R arca-inc/lwe-patched \
+            -p 'lwe-output-linux-amd64.tar.gz' -O lwe-output.tar.gz
+          mkdir -p lwe/build
+          tar -xzf lwe-output.tar.gz -C lwe/build
+          ls lwe/build/output/linux-wallpaperengine lwe/build/output/liblinux-wallpaperengine-lib.so
+
+      # The daemon links libcef, whose chromium NEEDED libs we don't install in
+      # CI; relax the link-time check (this is a build-only runner — the bundle's
+      # real runtime deps are the system packages listed in the README/PKGBUILD).
+      - name: Build all binaries
+        env:
+          CGO_LDFLAGS: -Wl,--allow-shlib-undefined
+        run: make
+
+      - name: Assemble bundle
+        run: |
+          mkdir -p dist/wepapered
+          cp bin/wepapered-daemon bin/wepapered-gui bin/wepapered-settings bin/wepaperedctl dist/wepapered/
+          # Colocate the LWE runtime next to the binaries (paths.go expects
+          # linux-wallpaperengine to sit beside the executable in a packaged install).
+          cp -a lwe/build/output/. dist/wepapered/
+          # Self-contain: resolve colocated libs via $ORIGIN regardless of cwd.
+          for f in dist/wepapered/*; do
+            [ -f "$f" ] || continue
+            if file "$f" | grep -q ELF; then patchelf --set-rpath '$ORIGIN' "$f" || true; fi
+          done
+          tar -czf wepapered-linux-amd64.tar.gz -C dist wepapered
+          du -sh dist/wepapered
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wepapered-bundle-linux-amd64
+          path: wepapered-linux-amd64.tar.gz
+
+      - name: Refresh rolling latest release
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release delete latest -R ${{ github.repository }} --yes --cleanup-tag || true
+
+      - name: Publish latest (rolling)
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build
+          prerelease: true
+          files: wepapered-linux-amd64.tar.gz
+
+      - name: Publish versioned release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: wepapered-linux-amd64.tar.gz
