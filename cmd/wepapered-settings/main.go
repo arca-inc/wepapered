@@ -191,20 +191,6 @@ func runConfigUI(cfg *core.Config) {
 	themeBox.PackStart(themeLabel, false, false, 0)
 	themeBox.PackStart(skinCombo, true, true, 0)
 
-	// ── Placeholder (loading) backend ─────────────────────────────────────────
-	phBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
-	phLabel, _ := gtk.LabelNew("Loading backend:")
-	phLabel.SetXAlign(0)
-	phLabel.SetWidthChars(labelChars)
-
-	phEntry, _ := gtk.EntryNew()
-	phEntry.SetHExpand(true)
-	phEntry.SetText(cfg.PlaceholderBackend)
-	phEntry.SetPlaceholderText("hyprpaper (default)")
-
-	phBox.PackStart(phLabel, false, false, 0)
-	phBox.PackStart(phEntry, true, true, 0)
-
 	// ── Audio source (visualizer capture) ─────────────────────────────────────
 	// "Default (auto)" = LWE follows the default output sink's monitor. Otherwise
 	// the chosen monitor source is forced via LWE_AUDIO_DEVICE.
@@ -363,8 +349,6 @@ func runConfigUI(cfg *core.Config) {
 		apiKey, _ := apiEntry.GetText()
 		cfg.SteamAPIKey = apiKey
 		cfg.GuiSkin = skinCombo.GetActiveID()
-		phText, _ := phEntry.GetText()
-		cfg.PlaceholderBackend = phText
 		cfg.AudioDevice = monCombo.GetActiveID()
 		cfg.MediaPlayer = playerCombo.GetActiveID()
 		cfg.NowPlayingText = npCheck.GetActive()
@@ -387,7 +371,6 @@ func runConfigUI(cfg *core.Config) {
 	box.PackStart(pathBox, false, false, 0)
 	box.PackStart(apiBox, false, false, 0)
 	box.PackStart(themeBox, false, false, 0)
-	box.PackStart(phBox, false, false, 0)
 	box.PackStart(audioBox, false, false, 0)
 	box.PackStart(playerBox, false, false, 0)
 	box.PackStart(npCheck, false, false, 0)

@@ -44,6 +44,8 @@ type WSServer struct {
 	watcher      *Watcher // set in run.go; lets reload re-point the config watch
 	discord      *DiscordRP
 
+	favMu sync.Mutex // serializes favorite read-modify-write of the config
+
 	// sessionBaseline is a snapshot of the state when the browse UI last opened,
 	// used to roll back on Cancel (cancelAndClose).
 	sessionBaseline *DaemonState
@@ -688,9 +690,70 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 
 // sendHostedUIData pushes the wallpaper library and the translation table to a
 // freshly connected client. Used by the hosted-UI mode (CEF window / probe).
+// markFavorites flags wallpapers whose workshopid is in the persisted favorites
+// list so the UI shows them as favorited (filled heart, "favorites only" filter).
+// The WE UI keys favorites by workshopid, so an installed item (File=path) and the
+// same item in Workshop search (File=id) share one favorite key. File is also
+// matched as a fallback for any non-workshop favoriting.
+func (s *WSServer) markFavorites(lib []UIWallpaper) {
+	fav := s.cfg.Load().Favorites
+	if len(fav) == 0 {
+		return
+	}
+	set := make(map[string]bool, len(fav))
+	for _, f := range fav {
+		set[f] = true
+	}
+	for i := range lib {
+		if (lib[i].WorkshopID != "" && set[lib[i].WorkshopID]) || set[lib[i].File] {
+			lib[i].Favorite = true
+		}
+	}
+}
+
+// setFavorites adds/removes wallpapers (by workshopid) from the persisted favorites
+// list and writes the config to disk. The grid context menu favorites a batch at
+// once. Serialized by favMu.
+func (s *WSServer) setFavorites(ids []string, fav bool) {
+	if len(ids) == 0 {
+		return
+	}
+	touch := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			touch[id] = true
+		}
+	}
+	if len(touch) == 0 {
+		return
+	}
+	s.favMu.Lock()
+	defer s.favMu.Unlock()
+	cur := s.cfg.Load()
+	out := make([]string, 0, len(cur.Favorites)+len(touch))
+	for _, f := range cur.Favorites {
+		if !touch[f] { // drop the ids we're touching; re-add below if favoriting
+			out = append(out, f)
+		}
+	}
+	if fav {
+		for id := range touch {
+			out = append(out, id)
+		}
+	}
+	newCfg := *cur
+	newCfg.Favorites = out
+	s.cfg.Store(&newCfg)
+	if err := saveConfig(&newCfg); err != nil {
+		log.Printf("[wepapered] favorite save error: %v", err)
+	}
+	log.Printf("[WE] favorite %v: %v (%d total)", fav, ids, len(out))
+}
+
 func (s *WSServer) sendHostedUIData(conn *websocket.Conn) {
 	lib := enumerateLibrary(s.cfg.Load().WEPath, s.cfg.Load().CustomDirs)
-	
+	s.markFavorites(lib)
+
 	sendLibrary := func(library []UIWallpaper) {
 		if data, err := json.Marshal(map[string]interface{}{
 			"type":       "library",
@@ -758,9 +821,9 @@ func notifyUser(body string) {
 		dbusAddr := fmt.Sprintf("unix:path=/run/user/%d/bus", sessionUID())
 		cmd = exec.Command("sudo", "-u", sessionUsername(),
 			"env", "DBUS_SESSION_BUS_ADDRESS="+dbusAddr,
-			"notify-send", "-a", "wepapered", "Wallpaper Engine", body)
+			"notify-send", "-a", "wepapered", "WePapered", body)
 	} else {
-		cmd = exec.Command("notify-send", "-a", "wepapered", "Wallpaper Engine", body)
+		cmd = exec.Command("notify-send", "-a", "wepapered", "WePapered", body)
 	}
 	if err := cmd.Run(); err != nil {
 		log.Printf("[wepapered] notify failed: %v", err)

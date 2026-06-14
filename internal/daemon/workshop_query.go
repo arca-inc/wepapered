@@ -224,6 +224,7 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 
 		results = append(results, w)
 	}
+	s.markFavorites(results)
 
 	// The browse controller's success handler (r in scripts.js) rejects the
 	// result unless e.token === i.token, falling back to an endless re-query

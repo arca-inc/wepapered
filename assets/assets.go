@@ -9,3 +9,8 @@ import _ "embed"
 //
 //go:embed tray.png
 var TrayPNG []byte
+
+// LoadingPNG is the WePapered logo for the loading overlay (256x256 PNG).
+//
+//go:embed loading.png
+var LoadingPNG []byte

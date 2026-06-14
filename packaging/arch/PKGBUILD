@@ -9,7 +9,7 @@ pkgdesc='Wallpaper Engine wallpapers rendered natively on Hyprland and Wayland'
 arch=('x86_64')
 url='https://github.com/arca-inc/wepapered'
 license=('custom')
-depends=('gtk3' 'webkit2gtk-4.1' 'hyprland' 'nss'
+depends=('gtk3' 'gtk-layer-shell' 'webkit2gtk-4.1' 'hyprland' 'nss'
          'mpv' 'ffmpeg' 'sdl2' 'glew' 'glfw' 'freeglut' 'glu')
 makedepends=('go' 'cmake' 'git' 'gcc' 'patchelf')
 optdepends=('hyprpaper: default loading placeholder backend'
@@ -70,7 +70,8 @@ package() {
 	local _out='lwe/build/output'
 	install -dm755 "${_libdir}"
 
-	# The four wepapered binaries.
+	# The four wepapered binaries. (The loading overlay is built into the daemon via
+	# gtk-layer-shell — no separate binary.)
 	install -m755 \
 		bin/wepapered-daemon bin/wepapered-gui bin/wepapered-settings bin/wepaperedctl \
 		"${_libdir}/"

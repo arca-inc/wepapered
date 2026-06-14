@@ -26,6 +26,7 @@ type UIWallpaper struct {
 	Status        string                 `json:"status"` // "installed"
 	Local         bool                   `json:"local"`  // true for myprojects, false for workshop items
 	Approved      bool                   `json:"approved"`
+	Favorite      bool                   `json:"favorite"` // restored from config Favorites
 	Author        string                 `json:"author"`
 	General       map[string]interface{} `json:"general,omitempty"`
 	Properties    map[string]interface{} `json:"properties,omitempty"`

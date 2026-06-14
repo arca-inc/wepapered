@@ -84,6 +84,18 @@ func (s *WSServer) handleUI(conn *websocket.Conn, msg WEMessage) {
 		})
 		s.sendCallback(conn, msg.Method+"Callback", nil)
 
+	case "setFavorited":
+		// ui.setFavorited(<id|[ids]>, <bool>) — the grid context menu passes an ARRAY
+		// of workshopids (l.filter(e=>e.workshopid).map(e=>e.workshopid)); the details
+		// rating row passes a single workshopid. Persist them so favorites survive
+		// restarts. Identity key is the workshopid (matched back in markFavorites).
+		if len(msg.Args) >= 2 {
+			ids := collectWorkshopIDs(msg.Args[:1])
+			fav, _ := msg.Args[1].(bool)
+			s.setFavorites(ids, fav)
+		}
+		s.sendCallback(conn, msg.Method+"Callback", nil)
+
 	case "shellexecute", "openplatformbrowser", "openhtmlexternally":
 		// WE opens external URLs/files through these host hooks (e.g. the right-click
 		// "Open in workshop" → openUrl(workshopurl) → ui.shellexecute, plus help and

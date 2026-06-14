@@ -134,6 +134,12 @@ void run_ui_window(const char *url, int width, int height) {
     gtk_window_set_default_size(GTK_WINDOW(win), width, height);
     gtk_window_set_position(GTK_WINDOW(win), GTK_WIN_POS_CENTER);
 
+    // Don't let the window shrink below a usable size (16:9 minimum).
+    GdkGeometry minHints;
+    minHints.min_width = 768;
+    minHints.min_height = 432;
+    gtk_window_set_geometry_hints(GTK_WINDOW(win), NULL, &minHints, GDK_HINT_MIN_SIZE);
+
     // No native title bar decorations — the WE UI draws its own top bar.
     gtk_window_set_decorated(GTK_WINDOW(win), FALSE);
 

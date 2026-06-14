@@ -24,11 +24,6 @@ type Config struct {
 	// Other shipped options: skinobsidian, skinspace, skinmetal, skinmist,
 	// skinmoss, skinrose, skinrust, skinwinter, skinhalloween, main (light).
 	GuiSkin string `json:"gui_skin"`
-	// PlaceholderBackend chooses the tool that paints the loading placeholder
-	// image on each output while LWE starts up: "hyprpaper" (default), "swww",
-	// "none" (no placeholder), or a custom command template where {output} and
-	// {image} are substituted (e.g. "swww img {image} --outputs {output}").
-	PlaceholderBackend string `json:"placeholder_backend"`
 	// AudioDevice forces which audio source the visualizer reacts to (a PulseAudio/
 	// PipeWire source name, usually a "<sink>.monitor"). Empty = follow the default
 	// output sink's monitor automatically. Passed to LWE as LWE_AUDIO_DEVICE.
@@ -44,6 +39,9 @@ type Config struct {
 	// forwarded to `playerctl --player=` (e.g. "spotify,%any" — prefer Spotify, fall
 	// back to any). Empty = playerctl's default selection. Passed as LWE_MEDIA_PLAYER.
 	MediaPlayer string `json:"media_player"`
+	// Favorites are the wallpaper identity keys (UIWallpaper.File) the user has
+	// favorited in the WE UI (heart). Persisted so favorites survive restarts.
+	Favorites []string `json:"favorites,omitempty"`
 }
 
 func ConfigPath() string {

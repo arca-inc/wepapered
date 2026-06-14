@@ -61,6 +61,9 @@ func Run() {
 	// down cleanly, so we don't end up with duplicate processes per output.
 	killStrayRenderers()
 
+	// Pre-initialise the loading overlay (its own GTK thread) so it pops instantly.
+	startLoadingOverlay()
+
 	// Discord Rich Presence (optional; connects in the background when Discord runs).
 	go ws.discord.Run()
 	ws.updateDiscordPresence()

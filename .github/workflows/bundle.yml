@@ -36,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libgtk-3-dev libwebkit2gtk-4.1-dev patchelf file \
+            libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev patchelf file \
             libmpv2 libsdl2-2.0-0 libglew2.2 libglfw3 freeglut3-dev libglu1-mesa-dev \
             libavcodec60 libavformat60 libavutil58 libswscale7 \
             libpulse0 liblz4-1 libfftw3-double3 libfreetype6 \

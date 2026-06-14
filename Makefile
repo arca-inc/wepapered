@@ -1,7 +1,8 @@
 # wepapered — four binaries from one module, built into ./bin.
 #
-#   make            build all four into ./bin
-#   make daemon     just the background renderer/daemon (links the LWE library)
+#   make            build all into ./bin
+#   make daemon     the background renderer/daemon (links LWE + the gtk-layer-shell
+#                   loading overlay)
 #   make gui        the WebKit browse window
 #   make settings   the GTK settings window
 #   make ctl        the wepaperedctl dispatcher
