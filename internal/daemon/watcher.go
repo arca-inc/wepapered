@@ -39,14 +39,18 @@ func (w *Watcher) Start() error {
 
 	w.mu.Lock()
 	w.target = filepath.Join(w.wepath, "config.json")
-	target := w.target
+	dir := w.wepath
 	w.mu.Unlock()
 
-	if err := fsw.Add(target); err != nil {
+	// Watch the install DIRECTORY, not config.json directly: WE's config.json may
+	// not exist yet (WE never configured) and WE rewrites it via atomic rename,
+	// which detaches a file-level watch. Watching the dir catches the file being
+	// created/replaced; events are filtered down to config.json below.
+	if err := fsw.Add(dir); err != nil {
 		fsw.Close()
-		return fmt.Errorf("cannot watch %s: %w", target, err)
+		return fmt.Errorf("cannot watch %s: %w", dir, err)
 	}
-	log.Printf("[wepapered] watching: %s", target)
+	log.Printf("[wepapered] watching: %s", filepath.Join(dir, "config.json"))
 
 	go func() {
 		for {
@@ -55,7 +59,10 @@ func (w *Watcher) Start() error {
 				if !ok {
 					return
 				}
-				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+				if filepath.Base(event.Name) != "config.json" {
+					continue
+				}
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) || event.Has(fsnotify.Rename) {
 					w.handleChange(w.currentTarget())
 				}
 			case err, ok := <-fsw.Errors:
@@ -86,20 +93,20 @@ func (w *Watcher) Rebind(newWEPath string) {
 	defer w.mu.Unlock()
 
 	newTarget := filepath.Join(newWEPath, "config.json")
-	if newTarget == w.target {
-		w.wepath = newWEPath
+	if newWEPath == w.wepath {
 		return
 	}
+	oldDir := w.wepath
 	if w.fsw == nil {
 		w.wepath, w.target = newWEPath, newTarget
 		return
 	}
-	if w.target != "" {
-		w.fsw.Remove(w.target) //nolint:errcheck
+	if oldDir != "" {
+		w.fsw.Remove(oldDir) //nolint:errcheck
 	}
-	if err := w.fsw.Add(newTarget); err != nil {
-		log.Printf("[wepapered] reload: cannot watch %s (keeping previous watch): %v", newTarget, err)
-		w.wepath = newWEPath
+	if err := w.fsw.Add(newWEPath); err != nil {
+		log.Printf("[wepapered] reload: cannot watch %s (keeping previous watch): %v", newWEPath, err)
+		w.wepath, w.target = newWEPath, newTarget
 		return
 	}
 	w.wepath, w.target = newWEPath, newTarget

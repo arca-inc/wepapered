@@ -8,10 +8,11 @@ import "wepapered/internal/core"
 type Config = core.Config
 
 var (
-	loadConfig    = core.LoadConfig
-	saveConfig    = core.SaveConfig
-	resolveWEPath = core.ResolveWEPath
-	weDirValid    = core.WeDirValid
+	loadConfig       = core.LoadConfig
+	saveConfig       = core.SaveConfig
+	resolveWEPath    = core.ResolveWEPath
+	weDirValid       = core.WeDirValid
+	steamLibraryDirs = core.SteamLibraryDirs
 
 	lweOutputDir     = core.LWEOutputDir
 	lwebin           = core.LWEBin

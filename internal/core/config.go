@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 type Config struct {
@@ -49,9 +51,29 @@ func ConfigPath() string {
 	return filepath.Join(home, ".config", "wepapered", "config.json")
 }
 
+// DefaultConfig returns a fresh config populated with sensible defaults: the
+// auto-detected Wallpaper Engine path, the default UI skin, and an empty
+// assignment map. Used on first run when no config file exists yet.
+func DefaultConfig() *Config {
+	return &Config{
+		WEPath:      AutoDetectWEPath(),
+		GuiSkin:     "skindark",
+		Assignments: map[string]string{},
+	}
+}
+
 func LoadConfig() (*Config, error) {
 	data, err := os.ReadFile(ConfigPath())
 	if err != nil {
+		// First run: no config yet — create it on disk populated with defaults so
+		// the user has a real, editable file (with the detected WE path) from the
+		// start. Any other read error (e.g. permissions) returns empty without
+		// clobbering whatever is there.
+		if os.IsNotExist(err) {
+			cfg := DefaultConfig()
+			_ = SaveConfig(cfg) // best-effort; ok if the dir isn't writable yet
+			return cfg, nil
+		}
 		return &Config{}, nil
 	}
 	var cfg Config
@@ -73,13 +95,12 @@ func SaveConfig(cfg *Config) error {
 	return os.WriteFile(path, data, 0644)
 }
 
-// WeDirValid reports whether p looks like a real Wallpaper Engine install.
+// WeDirValid reports whether p looks like a real Wallpaper Engine install,
+// identified by the wallpaper32.exe + wallpaper64.exe signature (same check as
+// autodetect). Note: WE's own config.json is runtime state that may not exist
+// until WE has run, so it is NOT a reliable install marker.
 func WeDirValid(p string) bool {
-	if p == "" {
-		return false
-	}
-	_, err := os.Stat(filepath.Join(p, "config.json"))
-	return err == nil
+	return p != "" && isWEDir(p)
 }
 
 // ResolveWEPath returns the configured path if it is a valid WE install,
@@ -91,19 +112,99 @@ func ResolveWEPath(cfg *Config) string {
 	return AutoDetectWEPath()
 }
 
-// AutoDetectWEPath checks common Steam installation locations.
-func AutoDetectWEPath() string {
-	home, _ := os.UserHomeDir()
-	candidates := []string{
-		filepath.Join(home, ".var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common/wallpaper_engine"),
-		filepath.Join(home, ".local/share/Steam/steamapps/common/wallpaper_engine"),
-		"/mnt/sata/SteamLibrary/steamapps/common/wallpaper_engine",
-		"/mnt/nvme/SteamLibrary/steamapps/common/wallpaper_engine",
+// isWEDir reports whether dir holds a Wallpaper Engine install, identified by the
+// presence of BOTH wallpaper32.exe and wallpaper64.exe — the signature we use to
+// recognise WE regardless of how/where it was installed.
+func isWEDir(dir string) bool {
+	for _, exe := range []string{"wallpaper32.exe", "wallpaper64.exe"} {
+		if _, err := os.Stat(filepath.Join(dir, exe)); err != nil {
+			return false
+		}
 	}
-	for _, p := range candidates {
-		if _, err := os.Stat(filepath.Join(p, "config.json")); err == nil {
-			return p
+	return true
+}
+
+// AutoDetectWEPath finds the Wallpaper Engine install by looking for a directory
+// containing wallpaper32.exe + wallpaper64.exe in known locations: every Steam
+// library (default installs + libraryfolders.vdf, across all drives) under
+// steamapps/common/wallpaper_engine, plus common SteamLibrary folders and manual
+// install spots on mounted drives so a copy installed outside Steam is still found.
+func AutoDetectWEPath() string {
+	var cands []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		seen[p] = true
+		cands = append(cands, p)
+	}
+
+	// Registered Steam libraries (default installs + libraryfolders.vdf on any disk).
+	for _, lib := range SteamLibraryDirs() {
+		add(filepath.Join(lib, "steamapps", "common", "wallpaper_engine"))
+	}
+
+	// Mounted drives: SteamLibrary folders that may not be registered in
+	// libraryfolders.vdf yet, plus installs outside Steam entirely.
+	for _, pat := range []string{"/mnt/*", "/media/*", "/media/*/*", "/run/media/*/*"} {
+		matches, _ := filepath.Glob(pat)
+		for _, m := range matches {
+			add(filepath.Join(m, "SteamLibrary", "steamapps", "common", "wallpaper_engine"))
+			add(filepath.Join(m, "steamapps", "common", "wallpaper_engine"))
+			add(filepath.Join(m, "wallpaper_engine"))
+			add(filepath.Join(m, "Wallpaper Engine"))
+		}
+	}
+
+	for _, c := range cands {
+		if isWEDir(c) {
+			return c
 		}
 	}
 	return ""
+}
+
+var libPathRe = regexp.MustCompile(`"path"\s+"([^"]+)"`)
+
+// SteamLibraryDirs returns the Steam library root directories, parsed from
+// libraryfolders.vdf, always including the default native and Flatpak installs.
+func SteamLibraryDirs() []string {
+	home, _ := os.UserHomeDir()
+	var dirs []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		// Canonicalize so symlinked roots (e.g. ~/.steam/steam -> ~/.local/share/
+		// Steam) collapse to one entry instead of producing duplicate library rows.
+		if rp, err := filepath.EvalSymlinks(p); err == nil {
+			p = rp
+		}
+		if seen[p] {
+			return
+		}
+		seen[p] = true
+		dirs = append(dirs, p)
+	}
+
+	bases := []string{
+		filepath.Join(home, ".local", "share", "Steam"),
+		filepath.Join(home, ".steam", "steam"),
+		filepath.Join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
+	}
+	for _, b := range bases {
+		add(b)
+	}
+	for _, b := range bases {
+		data, err := os.ReadFile(filepath.Join(b, "steamapps", "libraryfolders.vdf"))
+		if err != nil {
+			continue
+		}
+		for _, m := range libPathRe.FindAllStringSubmatch(string(data), -1) {
+			add(filepath.FromSlash(strings.ReplaceAll(m[1], `\\`, `/`)))
+		}
+	}
+	return dirs
 }

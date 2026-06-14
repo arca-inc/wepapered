@@ -89,7 +89,9 @@ func Run() {
 	w := newWatcher(cfg, ws)
 	ws.watcher = w // let /reload re-point the watch when the WE path changes
 	if err := w.Start(); err != nil {
-		log.Fatalf("watcher start failed: %v", err)
+		// Non-fatal: the watcher only re-asserts our selection when WE clears it.
+		// The daemon renders fine without it, so log and carry on.
+		log.Printf("watcher start failed (continuing without WE config re-assert): %v", err)
 	}
 
 	tray := newTrayManager(cfg)

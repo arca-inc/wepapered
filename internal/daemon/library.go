@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 )
@@ -81,8 +80,6 @@ func enumerateLibrary(wePath string, customDirs []string) []UIWallpaper {
 	return out
 }
 
-var libPathRe = regexp.MustCompile(`"path"\s+"([^"]+)"`)
-
 // workshopRoots returns candidate …/workshop/content/431960 directories: the one
 // derived from the WE install path (correct for genuine Steam installs) plus any
 // discovered from the Steam library folders (correct when WE is a manual copy
@@ -103,48 +100,6 @@ func workshopRoots(wePath string) []string {
 		add(filepath.Join(lib, "steamapps", "workshop", "content", "431960"))
 	}
 	return roots
-}
-
-// steamLibraryDirs returns the Steam library root directories, parsed from
-// libraryfolders.vdf, always including the default native and Flatpak installs.
-func steamLibraryDirs() []string {
-	home, _ := os.UserHomeDir()
-	var dirs []string
-	seen := map[string]bool{}
-	add := func(p string) {
-		if p == "" {
-			return
-		}
-		// Canonicalize so symlinked roots (e.g. ~/.steam/steam -> ~/.local/share/
-		// Steam) collapse to one entry instead of producing duplicate library rows.
-		if rp, err := filepath.EvalSymlinks(p); err == nil {
-			p = rp
-		}
-		if seen[p] {
-			return
-		}
-		seen[p] = true
-		dirs = append(dirs, p)
-	}
-
-	bases := []string{
-		filepath.Join(home, ".local", "share", "Steam"),
-		filepath.Join(home, ".steam", "steam"),
-		filepath.Join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
-	}
-	for _, b := range bases {
-		add(b)
-	}
-	for _, b := range bases {
-		data, err := os.ReadFile(filepath.Join(b, "steamapps", "libraryfolders.vdf"))
-		if err != nil {
-			continue
-		}
-		for _, m := range libPathRe.FindAllStringSubmatch(string(data), -1) {
-			add(filepath.FromSlash(strings.ReplaceAll(m[1], `\\`, `/`)))
-		}
-	}
-	return dirs
 }
 
 // scanLibraryRoot scans a user-provided directory. It accepts either a single
