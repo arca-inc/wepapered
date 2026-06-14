@@ -191,12 +191,19 @@ function updateUIState() {
 	
 	console.log("[wepapered-ui] updateUIState applying config:", monitorsArray, selectedWallpapers);
 
+	// Use the persisted workshop content filter (Show/Hide Anime, etc.) when present,
+	// so the user's choice survives restarts. The filter lives in
+	// browserSettings.defaultfilterconfig and WE persists it via persistBrowserSettings;
+	// passing a hardcoded {Anime:false} here would clobber the restored value every load.
+	var ffc = (state.browser_settings && state.browser_settings.defaultfilterconfig)
+		? state.browser_settings.defaultfilterconfig : { Anime: false };
+
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: (state.layout || 0) }, browser: { advertiseworkshop: false, advertiseexplore: false, advertisesendtomobile: false, defaultfilterconfig: { Anime: false } } },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: (state.layout || 0) }, browser: { advertiseworkshop: false, advertiseexplore: false, advertiseworkshoppopup: false, advertisesendtomobile: false, defaultfilterconfig: ffc } },
 		{},
 		false
-	);	
+	);
 	if (val.wallpaperConfig) {
 		val.wallpaperConfig.selectedwallpapers = selectedWallpapers;
 	}
@@ -515,6 +522,37 @@ BRIDGE_OBJECTS.forEach(function(name) {
 		});
 	} catch(e){}
 });
+
+// DEBUG (wepdbg): log filter state so we can see why installed-tab filtering behaves as
+// it does — wraps sortWallpapers to dump source, counts, the first wallpaper's tags, and
+// the genre/type/source filter maps to the daemon log ([JS] [wepdbg] …).
+(function(){
+	var iv = setInterval(function(){
+		var c = window.browseWallpapersCtrl;
+		if (!c || !c.sortWallpapers || c.__wepDbg) return;
+		c.__wepDbg = true;
+		clearInterval(iv);
+		var orig = c.sortWallpapers.bind(c);
+		var n = 0;
+		c.sortWallpapers = function(){
+			var r = orig.apply(this, arguments);
+			if (n++ < 12) {
+				try {
+					var f = c.filter || {};
+					var w0 = (c.wallpapers || [])[0] || {};
+					console.log('[wepdbg] src=' + (c.sourceIsInstalled ? 'installed' : (c.sourceIsWorkshop ? 'workshop' : '?')) +
+						' wp=' + (c.wallpapers || []).length + ' sorted=' + (c.sortedWallpapers || []).length +
+						' tags0=' + JSON.stringify(w0.tags) +
+						' genres=' + JSON.stringify(f.tags) +
+						' typetags=' + JSON.stringify(f.typetags) +
+						' sourcetags=' + JSON.stringify(f.sourcetags) +
+						' ratingtags=' + JSON.stringify(f.ratingtags));
+				} catch (e) { console.log('[wepdbg] err ' + e); }
+			}
+			return r;
+		};
+	}, 200);
+})();
 
 </script>
 		<style>

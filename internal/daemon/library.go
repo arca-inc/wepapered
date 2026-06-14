@@ -22,13 +22,26 @@ type UIWallpaper struct {
 	WorkshopURL   string   `json:"workshopurl,omitempty"` // Steam page; openSteamWorkshopPage reads this
 	ItemID        string   `json:"itemid,omitempty"`
 	ContentRating string   `json:"contentrating"`
-	Tags          []string `json:"tags"`
+	Tags          string   `json:"tags"` // comma-separated; WE's filter does t.tags.split(",")/indexOf
 	Status        string                 `json:"status"` // "installed"
 	Local         bool                   `json:"local"`  // true for myprojects, false for workshop items
 	Approved      bool                   `json:"approved"`
 	Author        string                 `json:"author"`
 	General       map[string]interface{} `json:"general,omitempty"`
 	Properties    map[string]interface{} `json:"properties,omitempty"`
+}
+
+// isNumericID reports whether s is a non-empty all-digit string (a Steam workshop ID).
+func isNumericID(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // enumerateLibrary scans the installed Wallpaper Engine content and returns the
@@ -217,9 +230,17 @@ func uiWallpaperFromMeta(dir, dirName string, meta *ProjectJSON, local bool) (UI
 		preview = "/projects/" + filepath.Join(dir[idx+len("/projects/"):], previewFile)
 	}
 
-	workshopID := meta.WorkshopID
+	workshopID := string(meta.WorkshopID)
 	if workshopID == "" && !local {
 		workshopID = dirName // workshop content dirs are named by their ID
+	}
+
+	// Steam workshop page, read by the UI's right-click "Open in workshop"
+	// (openSteamWorkshopPage → openUrl(workshopurl)). Only for real (numeric) workshop
+	// items; local/myprojects wallpapers have no workshop page.
+	workshopURL := ""
+	if isNumericID(workshopID) {
+		workshopURL = "https://steamcommunity.com/sharedfiles/filedetails/?id=" + workshopID
 	}
 
 	title := meta.Title
@@ -232,10 +253,28 @@ func uiWallpaperFromMeta(dir, dirName string, meta *ProjectJSON, local bool) (UI
 		contentRating = "Everyone"
 	}
 
-	tags := meta.Tags
-	if tags == nil {
-		tags = []string{}
+	// WE's installed-tab filter matches against wallpaper.tags as a comma-separated
+	// STRING (t.tags.split(",") / indexOf). It expects the type and source tokens to be
+	// present alongside the genre tags, so build "<Type>,<Source>,<genres…>,Approved".
+	var tagParts []string
+	switch strings.ToLower(meta.Type) {
+	case "scene":
+		tagParts = append(tagParts, "Scene")
+	case "video":
+		tagParts = append(tagParts, "Video")
+	case "web":
+		tagParts = append(tagParts, "Web")
+	case "application":
+		tagParts = append(tagParts, "Application")
 	}
+	if local {
+		tagParts = append(tagParts, "Local")
+	} else {
+		tagParts = append(tagParts, "Workshop")
+	}
+	tagParts = append(tagParts, meta.Tags...) // genre/utility tags from project.json
+	tagParts = append(tagParts, "Approved")   // matches Approved:true below
+	tags := strings.Join(tagParts, ",")
 
 	return UIWallpaper{
 		File:          dir,
@@ -244,6 +283,7 @@ func uiWallpaperFromMeta(dir, dirName string, meta *ProjectJSON, local bool) (UI
 		Preview:       preview,
 		PreviewSmall:  preview,
 		WorkshopID:    workshopID,
+		WorkshopURL:   workshopURL,
 		ItemID:        workshopID,
 		ContentRating: contentRating,
 		Tags:          tags,

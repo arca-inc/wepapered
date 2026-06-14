@@ -31,6 +31,7 @@ func (t *TrayManager) onReady() {
 
 	mBrowse := systray.AddMenuItem("Change Wallpapers...", "Open the WE UI to browse installed wallpapers")
 	mConfig := systray.AddMenuItem("Configuration", "Open the WePapered configuration menu")
+	mReload := systray.AddMenuItem("Reload", "Reload config and restart the wallpapers")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit WePapered and close wallpapers")
 
@@ -41,11 +42,23 @@ func (t *TrayManager) onReady() {
 				t.openWEBrowser()
 			case <-mConfig.ClickedCh:
 				t.openConfigUI()
+			case <-mReload.ClickedCh:
+				t.reload()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 			}
 		}
 	}()
+}
+
+// reload asks the running daemon (this process) to re-read its config and relaunch the
+// renderers, via the same local control endpoint wepaperedctl/settings use.
+func (t *TrayManager) reload() {
+	if err := core.ReloadDaemon(); err != nil {
+		log.Printf("[wepapered] tray reload failed: %v", err)
+		return
+	}
+	log.Printf("[wepapered] tray: reload requested")
 }
 
 // openWEBrowser launches the wepapered-gui WebKit window. The daemon is already

@@ -361,6 +361,8 @@ func (s *WSServer) handleBrowse(conn *websocket.Conn, msg WEMessage) {
 		s.onAcceptAndClose()
 	case "cancelAndClose":
 		s.onCancelAndClose()
+	case "openInExplorer":
+		s.onOpenInExplorer(msg.Args)
 	case "showSettingsDialog":
 		s.openConfigWindow()
 	case "updateProfile":
@@ -455,6 +457,28 @@ func (s *WSServer) cloneToAllOutputs(src *MonitorWallpaper) {
 		c.DevicePath = s.devicePathFor(label)
 		s.state.Monitors[label] = &c
 	}
+}
+
+// onOpenInExplorer opens the wallpaper's folder in the user's file manager. The arg is
+// the wallpaper's project/file path (a Linux path from the hosted UI, or a Windows path
+// from the legacy WE spy). Opens the containing directory if the path is a file.
+func (s *WSServer) onOpenInExplorer(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	p, _ := args[0].(string)
+	if p == "" {
+		return
+	}
+	if p[0] != '/' {
+		p = winToLinux(p, s.cfg.Load().WEPath)
+	}
+	dir := p
+	if !isDir(dir) {
+		dir = filepath.Dir(dir)
+	}
+	log.Printf("[WE] openInExplorer → xdg-open %s", dir)
+	exec.Command("xdg-open", dir).Start() //nolint
 }
 
 // openConfigWindow launches the wepapered GTK configuration window (--config).
@@ -601,7 +625,7 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		if !isDir(dir) {
 			dir = filepath.Dir(dir)
 		}
-		depDir := filepath.Join(filepath.Dir(dir), meta.Dependency)
+		depDir := filepath.Join(filepath.Dir(dir), string(meta.Dependency))
 		if depMeta := readProjectMeta(filepath.Join(depDir, "project.json")); depMeta != nil && depMeta.Type != "" {
 			meta.Type = depMeta.Type
 			renderDir = depDir

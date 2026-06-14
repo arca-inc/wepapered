@@ -205,7 +205,7 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 			WorkshopID:   item.PublishedFileID,
 			WorkshopURL:  "https://steamcommunity.com/sharedfiles/filedetails/?id=" + item.PublishedFileID,
 			ItemID:       item.PublishedFileID,
-			Tags:         tags,
+			Tags:         strings.Join(tags, ","),
 			Status:       status,
 			Local:        false,
 			Approved:     false,

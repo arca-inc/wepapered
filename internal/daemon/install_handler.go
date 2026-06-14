@@ -84,6 +84,17 @@ func (s *WSServer) handleUI(conn *websocket.Conn, msg WEMessage) {
 		})
 		s.sendCallback(conn, msg.Method+"Callback", nil)
 
+	case "shellexecute", "openplatformbrowser", "openhtmlexternally":
+		// WE opens external URLs/files through these host hooks (e.g. the right-click
+		// "Open in workshop" → openUrl(workshopurl) → ui.shellexecute, plus help and
+		// agreement links). On Linux, xdg-open handles http(s)://, steam:// and paths.
+		if len(msg.Args) > 0 {
+			if target, ok := msg.Args[0].(string); ok && target != "" {
+				log.Printf("[WE] ui.%s → xdg-open %s", msg.Method, target)
+				exec.Command("xdg-open", target).Start() //nolint
+			}
+		}
+
 	default:
 		log.Printf("[WE] ui.%s", msg.Method)
 	}

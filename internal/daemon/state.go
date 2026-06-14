@@ -90,7 +90,7 @@ func upgradeMonitorWallpaper(mw *MonitorWallpaper) {
 		if !isDir(dir) {
 			dir = filepath.Dir(dir)
 		}
-		depDir := filepath.Join(filepath.Dir(dir), meta.Dependency)
+		depDir := filepath.Join(filepath.Dir(dir), string(meta.Dependency))
 		if depMeta := readProjectMeta(filepath.Join(depDir, "project.json")); depMeta != nil && depMeta.Type != "" {
 			mw.Type = strings.ToLower(depMeta.Type)
 			mw.RenderDir = depDir
@@ -130,14 +130,32 @@ type ProjectJSON struct {
 	Type          string                 `json:"type"`
 	File          string                 `json:"file"`
 	Preview       string                 `json:"preview"`
-	Dependency    string                 `json:"dependency"`    // workshop ID of the framework this wallpaper depends on
+	Dependency    flexID                 `json:"dependency"`    // workshop ID of the framework this wallpaper depends on
 	Preset        map[string]interface{} `json:"preset"`        // user property overrides for dependency wallpapers
 	ContentRating string                 `json:"contentrating"` // e.g. "Everyone", "Questionable", "Mature"
 	Tags          []string               `json:"tags"`
-	WorkshopID    string                 `json:"workshopid"`
+	WorkshopID    flexID                 `json:"workshopid"`
 	General       map[string]interface{} `json:"general"`
 	Properties    map[string]interface{} `json:"properties"`
 }
+
+// flexID is a project.json field WE serializes as EITHER a JSON string or a JSON
+// number (workshopid/dependency are written both ways across wallpapers). The default
+// typed unmarshal of a number into a string fails the whole project.json parse, which
+// silently dropped such wallpapers from the library; this accepts both forms.
+type flexID string
+
+func (f *flexID) UnmarshalJSON(b []byte) error {
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" {
+		*f = ""
+		return nil
+	}
+	*f = flexID(strings.Trim(s, `"`)) // strip quotes if it's a JSON string; else raw number text
+	return nil
+}
+
+func (f flexID) String() string { return string(f) }
 
 func readProjectMeta(linuxPath string) *ProjectJSON {
 	dir := linuxPath
