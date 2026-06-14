@@ -83,7 +83,7 @@ static const char *DAEMON_DOWN_HTML =
 "<span class='dot'></span>"
 "<h1>Can&rsquo;t reach the wepapered daemon</h1>"
 "<p>The browse interface is served by the daemon, which doesn&rsquo;t appear to be running. Start it with:</p>"
-"<code>wepaperedctl daemon</code>"
+"<code>wepaperedctl daemon & disown</code>"
 "<div class='hint'>This window reconnects automatically once the daemon is up.</div>"
 "</div></body></html>";
 
@@ -178,6 +178,7 @@ void run_ui_window(const char *url, int width, int height) {
 }
 */
 import "C"
+
 import (
 	"os"
 	"unsafe"
