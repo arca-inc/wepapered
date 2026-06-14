@@ -17,3 +17,5 @@ var (
 	lwebin           = core.LWEBin
 	lwesubprocessbin = core.LWESubprocessBin
 )
+
+const controlAddr = core.ControlAddr

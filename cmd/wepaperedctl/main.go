@@ -26,6 +26,7 @@ commands:
   daemon      run the background renderer/daemon
   gui         open the Wallpaper Engine browse window
   settings    open the settings window
+  reload      tell a running daemon to reload config + restart renderers
   help        show this help
 
 Extra args are forwarded to the component
@@ -41,6 +42,13 @@ func main() {
 	switch os.Args[1] {
 	case "-h", "--help", "help":
 		usage()
+		return
+	case "reload":
+		if err := core.ReloadDaemon(); err != nil {
+			fmt.Fprintf(os.Stderr, "wepaperedctl: reload failed (is the daemon running?): %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("wepapered: daemon reloaded")
 		return
 	}
 

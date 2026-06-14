@@ -12,12 +12,12 @@ import (
 // serveUI serves the Wallpaper Engine UI over HTTP, injecting the JS bridge shim
 // into the index.html so it can communicate with the Go daemon via WebSocket.
 func (s *WSServer) serveUI(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.WEPath == "" {
+	if s.cfg.Load().WEPath == "" {
 		http.Error(w, "WEPath not configured", http.StatusInternalServerError)
 		return
 	}
 
-	uiDistPath := filepath.Join(s.cfg.WEPath, "ui", "dist")
+	uiDistPath := filepath.Join(s.cfg.Load().WEPath, "ui", "dist")
 	reqPath := strings.TrimPrefix(r.URL.Path, "/ui")
 	if reqPath == "" || reqPath == "/" {
 		reqPath = "/index.html"
@@ -41,9 +41,9 @@ func (s *WSServer) serveUI(w http.ResponseWriter, r *http.Request) {
 	if al := r.Header.Get("Accept-Language"); al != "" {
 		lang = strings.ToLower(strings.Split(strings.Split(al, ",")[0], ";")[0])
 	}
-	locale := loadLocale(s.cfg.WEPath, lang)
+	locale := loadLocale(s.cfg.Load().WEPath, lang)
 	if len(locale) == 0 {
-		locale = loadLocale(s.cfg.WEPath, "en-us")
+		locale = loadLocale(s.cfg.Load().WEPath, "en-us")
 	}
 	
 	// Override the main title

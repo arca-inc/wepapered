@@ -53,8 +53,8 @@ func Run() {
 	// already owns it, exit now — before touching renderers — so we never end up
 	// with two daemons fighting over the same outputs (which crash-loops LWE).
 	ws := newWSServer(cfg)
-	if err := ws.Start("127.0.0.1:9001"); err != nil {
-		log.Fatalf("[wepapered] a daemon is already running (127.0.0.1:9001 in use); not starting a second. (%v)", err)
+	if err := ws.Start(controlAddr); err != nil {
+		log.Fatalf("[wepapered] a daemon is already running (%s in use); not starting a second. (%v)", controlAddr, err)
 	}
 
 	// Clean up any renderers orphaned by a previous instance that didn't shut
@@ -84,6 +84,7 @@ func Run() {
 	}()
 
 	w := newWatcher(cfg, ws)
+	ws.watcher = w // let /reload re-point the watch when the WE path changes
 	if err := w.Start(); err != nil {
 		log.Fatalf("watcher start failed: %v", err)
 	}

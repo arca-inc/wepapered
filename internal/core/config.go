@@ -29,6 +29,21 @@ type Config struct {
 	// "none" (no placeholder), or a custom command template where {output} and
 	// {image} are substituted (e.g. "swww img {image} --outputs {output}").
 	PlaceholderBackend string `json:"placeholder_backend"`
+	// AudioDevice forces which audio source the visualizer reacts to (a PulseAudio/
+	// PipeWire source name, usually a "<sink>.monitor"). Empty = follow the default
+	// output sink's monitor automatically. Passed to LWE as LWE_AUDIO_DEVICE.
+	AudioDevice string `json:"audio_device"`
+	// NowPlayingText, when true, pushes the current track's title/artist (from MPRIS
+	// via playerctl) into a web wallpaper's headerText / subheaderText properties.
+	// Lets wallpapers that show a text label (e.g. audio visualizers) display the
+	// now-playing track without their own cloud integration. Off by default because
+	// it overrides those text fields whenever something is playing. Passed to LWE as
+	// LWE_MEDIA_TO_TEXT.
+	NowPlayingText bool `json:"now_playing_text"`
+	// MediaPlayer is the preferred MPRIS player priority list for now-playing data,
+	// forwarded to `playerctl --player=` (e.g. "spotify,%any" — prefer Spotify, fall
+	// back to any). Empty = playerctl's default selection. Passed as LWE_MEDIA_PLAYER.
+	MediaPlayer string `json:"media_player"`
 }
 
 func ConfigPath() string {

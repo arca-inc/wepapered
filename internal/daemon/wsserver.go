@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -32,12 +33,15 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSServer struct {
-	mu           sync.RWMutex
-	clients      map[*websocket.Conn]struct{}
-	cfg          *Config
+	mu      sync.RWMutex
+	clients map[*websocket.Conn]struct{}
+	// cfg is an atomic pointer so /reload can publish a new config (copy-on-write)
+	// without racing the many lock-free readers. Read with s.cfg.Load().
+	cfg          atomic.Pointer[Config]
 	state        *DaemonState
 	monitorInfos []MonitorInfo // populated from applyGeneral
 	renderer     *Renderer
+	watcher      *Watcher // set in run.go; lets reload re-point the config watch
 	discord      *DiscordRP
 
 	// sessionBaseline is a snapshot of the state when the browse UI last opened,
@@ -52,13 +56,14 @@ type WSServer struct {
 }
 
 func newWSServer(cfg *Config) *WSServer {
-	return &WSServer{
+	s := &WSServer{
 		clients:  make(map[*websocket.Conn]struct{}),
-		cfg:      cfg,
 		state:    loadState(),
 		renderer: newRenderer(cfg),
 		discord:  newDiscordRP(),
 	}
+	s.cfg.Store(cfg)
+	return s
 }
 
 // updateDiscordPresence sets the Discord Rich Presence. The app name ("WePapered",
@@ -75,30 +80,31 @@ func (s *WSServer) updateDiscordPresence() {
 func (s *WSServer) Start(addr string) error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/we", s.handle)
+	mux.HandleFunc("/reload", s.handleReload)
 	mux.HandleFunc("/ui/", s.serveUI)
 	localeHandler := func(w http.ResponseWriter, r *http.Request) {
 		reqPath := r.URL.Path[strings.LastIndex(r.URL.Path, "locale/")+len("locale/"):]
 		lang := strings.TrimSuffix(reqPath, ".json")
 		log.Printf("[wepapered] UI requested locale: %s", lang)
-		if table := loadLocale(s.cfg.WEPath, lang); len(table) > 0 {
+		if table := loadLocale(s.cfg.Load().WEPath, lang); len(table) > 0 {
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(table)
 			return
 		}
-		filePath := filepath.Join(s.cfg.WEPath, "locale", reqPath)
+		filePath := filepath.Join(s.cfg.Load().WEPath, "locale", reqPath)
 		http.ServeFile(w, r, filePath)
 	}
 	mux.HandleFunc("/locale/", localeHandler)
 	mux.HandleFunc("/ui/locale/", localeHandler)
 	mux.HandleFunc("/steamapps/", func(w http.ResponseWriter, r *http.Request) {
 		reqPath := r.URL.Path[len("/steamapps/"):]
-		steamappsPath := filepath.Join(s.cfg.WEPath, "..", "..")
+		steamappsPath := filepath.Join(s.cfg.Load().WEPath, "..", "..")
 		filePath := filepath.Join(steamappsPath, reqPath)
 		http.ServeFile(w, r, filePath)
 	})
 	mux.HandleFunc("/projects/", func(w http.ResponseWriter, r *http.Request) {
 		reqPath := r.URL.Path[len("/projects/"):]
-		filePath := filepath.Join(s.cfg.WEPath, "projects", reqPath)
+		filePath := filepath.Join(s.cfg.Load().WEPath, "projects", reqPath)
 		http.ServeFile(w, r, filePath)
 	})
 	// /asset serves a preview by absolute path, restricted to known roots (the WE
@@ -106,7 +112,7 @@ func (s *WSServer) Start(addr string) error {
 	// live outside the /projects and /steamapps trees (custom dirs).
 	mux.HandleFunc("/asset/", func(w http.ResponseWriter, r *http.Request) {
 		p := filepath.Clean(r.URL.Path[len("/asset"):]) // keeps the leading slash
-		roots := append([]string{s.cfg.WEPath}, s.cfg.CustomDirs...)
+		roots := append([]string{s.cfg.Load().WEPath}, s.cfg.Load().CustomDirs...)
 		roots = append(roots, steamLibraryDirs()...)
 		allowed := false
 		for _, root := range roots {
@@ -138,6 +144,40 @@ func (s *WSServer) Start(addr string) error {
 		}
 	}()
 	return nil
+}
+
+// handleReload re-reads the on-disk config and relaunches the renderers so settings
+// changes (audio device, preferred player, now-playing text, theme, custom dirs, …)
+// take effect without restarting the daemon. Triggered by `wepaperedctl reload` and by
+// the settings window on save.
+func (s *WSServer) handleReload(w http.ResponseWriter, r *http.Request) {
+	newCfg, err := loadConfig()
+	if err != nil {
+		log.Printf("[wepapered] reload: config load error: %v", err)
+		http.Error(w, "config load error", http.StatusInternalServerError)
+		return
+	}
+	// Repair the WE path the same way startup does, so a bad saved path doesn't break.
+	if !weDirValid(newCfg.WEPath) {
+		if resolved := resolveWEPath(newCfg); resolved != "" {
+			newCfg.WEPath = resolved
+		}
+	}
+	// Copy-on-write: publish the fully-built newCfg to each subsystem by swapping
+	// pointers, never mutating the shared struct in place. A pointer swap is a single
+	// word write, so lock-free readers always observe a complete config (old or new),
+	// never a half-overwritten one with a torn slice/string header.
+	s.cfg.Store(newCfg)
+	s.renderer.SetConfig(newCfg)
+	if s.watcher != nil {
+		s.watcher.Rebind(newCfg.WEPath)
+	}
+
+	log.Printf("[wepapered] reload requested — reloading config and relaunching renderers")
+	go s.renderer.Reload(s.state.snapshot())
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "reloaded")
 }
 
 func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +396,7 @@ func (s *WSServer) onChangeLayout(args []interface{}) {
 		if src := s.anyMonitorWallpaper(); src != nil {
 			s.cloneToAllOutputs(src)
 			saveState(s.state) //nolint
-			writeWESelectedWallpapers(s.cfg.WEPath, s.state.Monitors, s.monitorInfos) //nolint
+			writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos) //nolint
 			go s.renderer.Apply(s.state)
 		}
 	}
@@ -470,7 +510,7 @@ func (s *WSServer) onAcceptAndClose() {
 	if err := saveState(s.state); err != nil {
 		log.Printf("[wepapered] state save error: %v", err)
 	}
-	if err := writeWESelectedWallpapers(s.cfg.WEPath, s.state.Monitors, s.monitorInfos); err != nil {
+	if err := writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos); err != nil {
 		log.Printf("[wepapered] WE config write error: %v", err)
 	}
 	s.sessionBaseline = s.state.snapshot()
@@ -491,7 +531,7 @@ func (s *WSServer) onCancelAndClose() {
 	if err := saveState(s.state); err != nil {
 		log.Printf("[wepapered] state save error: %v", err)
 	}
-	if err := writeWESelectedWallpapers(s.cfg.WEPath, s.state.Monitors, s.monitorInfos); err != nil {
+	if err := writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos); err != nil {
 		log.Printf("[wepapered] WE config write error: %v", err)
 	}
 	log.Printf("[WE] cancelAndClose — rolled back to baseline")
@@ -547,7 +587,7 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 	// spy sends a Windows path (S:/…, Z:/…) that needs translation.
 	linuxPath := winPath
 	if len(winPath) == 0 || winPath[0] != '/' {
-		linuxPath = winToLinux(winPath, s.cfg.WEPath)
+		linuxPath = winToLinux(winPath, s.cfg.Load().WEPath)
 	}
 	workshopID := workshopIDFromPath(winPath)
 	meta := readProjectMeta(linuxPath)
@@ -610,7 +650,7 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 	}
 
 	// Write back into WE's config.json so it remembers on next startup.
-	if err := writeWESelectedWallpapers(s.cfg.WEPath, s.state.Monitors, s.monitorInfos); err != nil {
+	if err := writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos); err != nil {
 		log.Printf("[wepapered] WE config write error: %v", err)
 	}
 
@@ -625,7 +665,7 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 // sendHostedUIData pushes the wallpaper library and the translation table to a
 // freshly connected client. Used by the hosted-UI mode (CEF window / probe).
 func (s *WSServer) sendHostedUIData(conn *websocket.Conn) {
-	lib := enumerateLibrary(s.cfg.WEPath, s.cfg.CustomDirs)
+	lib := enumerateLibrary(s.cfg.Load().WEPath, s.cfg.Load().CustomDirs)
 	
 	sendLibrary := func(library []UIWallpaper) {
 		if data, err := json.Marshal(map[string]interface{}{
@@ -664,7 +704,7 @@ func (s *WSServer) sendHostedUIData(conn *websocket.Conn) {
 		}
 	}()
 
-	locale := loadLocale(s.cfg.WEPath, "en-us")
+	locale := loadLocale(s.cfg.Load().WEPath, "en-us")
 	if len(locale) > 0 {
 		if data, err := json.Marshal(map[string]interface{}{
 			"type":  "locale",

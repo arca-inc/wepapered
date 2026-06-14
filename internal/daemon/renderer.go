@@ -80,6 +80,10 @@ type screenProc struct {
 // Wallpaper changes use IPC hot-swap when possible; only if that fails
 // does the process get killed and restarted.
 type Renderer struct {
+	// applyMu serializes whole Apply/Reload operations so a Reload's Stop+relaunch is
+	// atomic with respect to any other Apply (watchdog re-apply, new selection). The
+	// finer-grained mu still guards the screens map within an operation.
+	applyMu      sync.Mutex
 	mu           sync.Mutex
 	screens      map[string]*screenProc // keyed by Wayland output name
 	cfg          *Config
@@ -352,8 +356,10 @@ func (r *Renderer) startLoadingBgLocked(outputs []hyprOutput) {
 // Backends: "hyprpaper" (default), "swww", "none", or a custom command template
 // where {output} and {image} are substituted as standalone argv tokens (so paths
 // with spaces survive without quoting), e.g. "swww img {image} --outputs {output}".
-func (r *Renderer) setPlaceholder(outputName, imgPath string) {
-	backend := strings.TrimSpace(r.cfg.PlaceholderBackend)
+// backend is passed in (read from cfg under r.mu by the caller) because this runs in a
+// detached goroutine and must not touch r.cfg unlocked — SetConfig may swap it on reload.
+func (r *Renderer) setPlaceholder(outputName, imgPath, backend string) {
+	backend = strings.TrimSpace(backend)
 	if backend == "" {
 		backend = "hyprpaper"
 	}
@@ -413,6 +419,9 @@ func (r *Renderer) startLoadingBgWithPreviewLocked(entries []loadingOutputEntry)
 		return
 	}
 	log.Printf("[renderer] loading placeholder on %d output(s)", len(entries))
+	// Read the backend here (caller holds r.mu) and hand it to the detached goroutines
+	// so they never read r.cfg unlocked (it can be swapped by SetConfig on reload).
+	backend := r.cfg.PlaceholderBackend
 	for _, e := range entries {
 		img := loadingPNGPath
 		if e.previewPath != "" {
@@ -420,7 +429,7 @@ func (r *Renderer) startLoadingBgWithPreviewLocked(entries []loadingOutputEntry)
 				img = e.previewPath
 			}
 		}
-		go r.setPlaceholder(e.output.Name, img)
+		go r.setPlaceholder(e.output.Name, img, backend)
 	}
 }
 
@@ -438,7 +447,22 @@ func (r *Renderer) stopLoadingBgLocked() {
 
 // ── Apply (diff-based with IPC hot-swap) ─────────────────────────────────────
 
+// SetConfig swaps the renderer's config pointer (guarded by mu, which the launch path
+// reads under). Used by daemon reload so subsequently launched subprocesses pick up new
+// settings (audio device, preferred player, …) which are passed via env at launch time.
+func (r *Renderer) SetConfig(cfg *Config) {
+	r.mu.Lock()
+	r.cfg = cfg
+	r.mu.Unlock()
+}
+
 func (r *Renderer) Apply(state *DaemonState) {
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+	r.applyLocked(state)
+}
+
+func (r *Renderer) applyLocked(state *DaemonState) {
 	r.mu.Lock()
 	r.lastState = state
 	defer r.mu.Unlock()
@@ -717,12 +741,27 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 	readyCh := make(chan struct{})
 
 	env := append(lweSubprocEnv(), "WEPAPERED_CTRL_SOCK="+ctrlSockPath)
+	// Forced audio capture device (empty = LWE follows the default output monitor).
+	if dev := strings.TrimSpace(r.cfg.AudioDevice); dev != "" {
+		env = append(env, "LWE_AUDIO_DEVICE="+dev)
+	}
+	// Forward now-playing track into web wallpapers' header/subheader text.
+	if r.cfg.NowPlayingText {
+		env = append(env, "LWE_MEDIA_TO_TEXT=1")
+	}
+	// Preferred MPRIS player priority list for now-playing (e.g. "spotify,%any").
+	if mp := strings.TrimSpace(r.cfg.MediaPlayer); mp != "" {
+		env = append(env, "LWE_MEDIA_PLAYER="+mp)
+	}
 
 	cmd := exec.Command(lwebin,
 		"--assets-dir", assetsDir,
 		"--silent",
 		"--fps", "30",
-		"--no-audio-processing",
+		// No --no-audio-processing: let LWE enable system-audio capture, which it
+		// already gates to wallpapers declaring supportsaudioprocessing (audio
+		// visualizers). Drives wallpaperRegisterAudioListener on web + the scene
+		// audio spectrum; non-audio wallpapers pay no capture cost.
 		"--screen-root", outputName,
 		"--bg", bgDir,
 	)
@@ -838,6 +877,19 @@ func killStrayRenderers() {
 }
 
 // Stop kills all running renderers and loading placeholders.
+// Reload tears down every running screen and relaunches from scratch. A plain Apply()
+// hot-swaps in place and would keep the OLD subprocess environment; several settings
+// (LWE_AUDIO_DEVICE, LWE_MEDIA_PLAYER, LWE_MEDIA_TO_TEXT) are passed via env at launch,
+// so picking them up requires actually restarting the linux-wallpaperengine processes.
+func (r *Renderer) Reload(state *DaemonState) {
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+	r.Stop() // takes mu (not applyMu) — safe to call while holding applyMu
+	if state != nil && len(state.Monitors) > 0 {
+		r.applyLocked(state)
+	}
+}
+
 func (r *Renderer) Stop() {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -4,10 +4,83 @@
 package main
 
 import (
+	"os/exec"
+	"strings"
+
 	"github.com/gotk3/gotk3/gtk"
 
 	"wepapered/internal/core"
 )
+
+// listAudioMonitors enumerates PulseAudio/PipeWire monitor sources (the ".monitor"
+// of each output sink) via `pactl`, to populate the audio-source picker. Returns nil
+// if pactl is unavailable; the picker then just offers "Default (auto)".
+func listAudioMonitors() []string {
+	out, err := exec.Command("pactl", "list", "sources", "short").Output()
+	if err != nil {
+		return nil
+	}
+	var mons []string
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 {
+			continue
+		}
+		if name := strings.TrimSpace(fields[1]); strings.Contains(name, ".monitor") {
+			mons = append(mons, name)
+		}
+	}
+	return mons
+}
+
+// listAudioApps returns the names of applications currently producing audio (PulseAudio
+// sink-inputs), via `pactl list sink-inputs` (application.name). Used to let the user
+// target a single app's audio. Returns nil if pactl is unavailable.
+func listAudioApps() []string {
+	out, err := exec.Command("pactl", "list", "sink-inputs").Output()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var apps []string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		const key = "application.name = "
+		if strings.HasPrefix(line, key) {
+			if v := strings.Trim(strings.TrimPrefix(line, key), "\""); v != "" && !seen[v] {
+				seen[v] = true
+				apps = append(apps, v)
+			}
+		}
+	}
+	return apps
+}
+
+// listMediaPlayers returns the available MPRIS player base names (e.g. "spotify",
+// "firefox") via `playerctl --list-all`, with the ".instanceN" suffix stripped and
+// duplicates removed. Returns nil if playerctl is unavailable.
+func listMediaPlayers() []string {
+	out, err := exec.Command("playerctl", "--list-all").Output()
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var players []string
+	for _, line := range strings.Split(string(out), "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if i := strings.Index(name, ".instance"); i >= 0 {
+			name = name[:i]
+		}
+		if !seen[name] {
+			seen[name] = true
+			players = append(players, name)
+		}
+	}
+	return players
+}
 
 // guiSkins lists the selectable WE UI themes as {value, label}. The value is the
 // stylesheet base name under ui/dist/styles (see core.GUIURL); the label is shown
@@ -132,6 +205,82 @@ func runConfigUI(cfg *core.Config) {
 	phBox.PackStart(phLabel, false, false, 0)
 	phBox.PackStart(phEntry, true, true, 0)
 
+	// ── Audio source (visualizer capture) ─────────────────────────────────────
+	// "Default (auto)" = LWE follows the default output sink's monitor. Otherwise
+	// the chosen monitor source is forced via LWE_AUDIO_DEVICE.
+	audioBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
+	audioLabel, _ := gtk.LabelNew("Audio source:")
+	audioLabel.SetXAlign(0)
+	audioLabel.SetWidthChars(labelChars)
+
+	monCombo, _ := gtk.ComboBoxTextNew()
+	monCombo.SetHExpand(true)
+	present := map[string]bool{"": true}
+	monCombo.Append("", "Default (auto)")
+	// Output sinks (capture everything sent to that device).
+	for _, m := range listAudioMonitors() {
+		monCombo.Append(m, m)
+		present[m] = true
+	}
+	// Individual applications (capture only that app's audio). Stored as "app:<name>".
+	for _, a := range listAudioApps() {
+		id := "app:" + a
+		monCombo.Append(id, a+" (application)")
+		present[id] = true
+	}
+	// Keep a previously-saved choice selectable even if it isn't present right now.
+	if cfg.AudioDevice != "" && !present[cfg.AudioDevice] {
+		label := cfg.AudioDevice + " (not detected)"
+		if strings.HasPrefix(cfg.AudioDevice, "app:") {
+			label = strings.TrimPrefix(cfg.AudioDevice, "app:") + " (application, not running)"
+		}
+		monCombo.Append(cfg.AudioDevice, label)
+	}
+	monCombo.SetActiveID(cfg.AudioDevice) // "" selects "Default (auto)"
+
+	audioBox.PackStart(audioLabel, false, false, 0)
+	audioBox.PackStart(monCombo, true, true, 0)
+
+	// ── Preferred media player (now-playing) ──────────────────────────────────
+	// "Any (default)" lets playerctl pick; otherwise prefer the chosen player and
+	// fall back to any (value "<player>,%any"), forwarded to playerctl --player=.
+	playerBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
+	playerLabel, _ := gtk.LabelNew("Preferred player:")
+	playerLabel.SetXAlign(0)
+	playerLabel.SetWidthChars(labelChars)
+
+	playerCombo, _ := gtk.ComboBoxTextNew()
+	playerCombo.SetHExpand(true)
+	playerCombo.Append("", "Any (default)")
+	players := listMediaPlayers()
+	for _, p := range players {
+		playerCombo.Append(p+",%any", p+" (then any)")
+	}
+	// Keep a previously-saved preference selectable even if its player isn't running.
+	if cfg.MediaPlayer != "" {
+		found := false
+		for _, p := range players {
+			if p+",%any" == cfg.MediaPlayer {
+				found = true
+				break
+			}
+		}
+		if !found {
+			playerCombo.Append(cfg.MediaPlayer, cfg.MediaPlayer)
+		}
+	}
+	playerCombo.SetActiveID(cfg.MediaPlayer) // "" selects "Any (default)"
+
+	playerBox.PackStart(playerLabel, false, false, 0)
+	playerBox.PackStart(playerCombo, true, true, 0)
+
+	// ── Now-playing as wallpaper text ─────────────────────────────────────────
+	npCheck, _ := gtk.CheckButtonNewWithLabel("Show now-playing track as wallpaper text")
+	npCheck.SetActive(cfg.NowPlayingText)
+	npCheck.SetTooltipText(
+		"Push the current track's title/artist (from playerctl/MPRIS) into web wallpapers " +
+			"that show a header label, e.g. audio visualizers. Overrides their header text while playing.")
+
 	// ── Custom wallpaper directories ──────────────────────────────────────────
 	dirs := append([]string{}, cfg.CustomDirs...)
 
@@ -216,11 +365,16 @@ func runConfigUI(cfg *core.Config) {
 		cfg.GuiSkin = skinCombo.GetActiveID()
 		phText, _ := phEntry.GetText()
 		cfg.PlaceholderBackend = phText
+		cfg.AudioDevice = monCombo.GetActiveID()
+		cfg.MediaPlayer = playerCombo.GetActiveID()
+		cfg.NowPlayingText = npCheck.GetActive()
 		cfg.CustomDirs = dirs
 
 		if err := core.SaveConfig(cfg); err != nil {
 			statusLabel.SetMarkup("<span foreground='red'>Save error</span>")
 		} else {
+			// Apply immediately if a daemon is running (best-effort: it may not be).
+			_ = core.ReloadDaemon()
 			gtk.MainQuit()
 		}
 	})
@@ -234,6 +388,9 @@ func runConfigUI(cfg *core.Config) {
 	box.PackStart(apiBox, false, false, 0)
 	box.PackStart(themeBox, false, false, 0)
 	box.PackStart(phBox, false, false, 0)
+	box.PackStart(audioBox, false, false, 0)
+	box.PackStart(playerBox, false, false, 0)
+	box.PackStart(npCheck, false, false, 0)
 	box.PackStart(sep, false, false, 4)
 	box.PackStart(dirsHeader, false, false, 0)
 	box.PackStart(dirsHint, false, false, 0)

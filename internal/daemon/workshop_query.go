@@ -69,7 +69,7 @@ func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 }
 
 func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
-	if s.cfg.SteamAPIKey == "" {
+	if s.cfg.Load().SteamAPIKey == "" {
 		log.Println("[WE] queryWorkshop: missing Steam API key")
 		s.sendCallback(conn, msg.Callback, map[string]interface{}{"wallpapers": []UIWallpaper{}, "total": 0})
 		return
@@ -118,7 +118,7 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	}
 
 	data := url.Values{}
-	data.Set("key", s.cfg.SteamAPIKey)
+	data.Set("key", s.cfg.Load().SteamAPIKey)
 	data.Set("appid", "431960")
 	data.Set("page", fmt.Sprint(page))
 	data.Set("numperpage", fmt.Sprint(numPerPage))
@@ -192,7 +192,7 @@ func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 		// item we don't have locally is "downloadable"; one present on disk is
 		// "installed".
 		status := "downloadable"
-		if isWorkshopInstalled(s.cfg.WEPath, item.PublishedFileID) {
+		if isWorkshopInstalled(s.cfg.Load().WEPath, item.PublishedFileID) {
 			status = "installed"
 		}
 
