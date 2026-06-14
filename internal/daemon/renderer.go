@@ -65,9 +65,10 @@ type screenProc struct {
 	cmd         *exec.Cmd
 	doneCh      chan struct{} // closed when subprocess exits
 	output      string
-	bgDir       string        // currently rendering wallpaper directory
-	presetDir   string        // preset/asset directory (may differ for same-framework web presets)
-	typ         string        // wallpaper type ("scene", "web", "video", …)
+	bgDir       string            // currently rendering wallpaper directory
+	presetDir   string            // preset/asset directory (may differ for same-framework web presets)
+	props       map[string]string // currently applied --set-property overrides
+	typ         string            // wallpaper type ("scene", "web", "video", …)
 	ctrlSock    string        // unix socket path for IPC hot-swap / stop
 	readyCh     chan struct{} // closed when LWE signals READY on the ready pipe
 	hotswapping bool          // IPC hot-swap in progress (protected by Renderer.mu)
@@ -143,6 +144,20 @@ func sendCtrlLoadJSON(sockPath, bgDir, presetDir string, props map[string]string
 // sendCtrlLoad is the legacy plain-text protocol (kept for compatibility).
 func sendCtrlLoad(sockPath, bgDir string) error {
 	return sendCtrlLoadJSON(sockPath, bgDir, "", nil)
+}
+
+// propsEqual reports whether two --set-property override maps are equal, so the
+// renderer reloads a screen when a wallpaper property changes.
+func propsEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if b[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func sendCtrlStop(sockPath string) {
@@ -480,7 +495,7 @@ func (r *Renderer) applyLocked(state *DaemonState) {
 			if sp.cmd.Process != nil {
 				sp.cmd.Process.Signal(syscall.SIGTERM)
 			}
-		} else if w.bgDir != sp.bgDir || w.presetDir != sp.presetDir {
+		} else if w.bgDir != sp.bgDir || w.presetDir != sp.presetDir || !propsEqual(w.props, sp.props) {
 			if sp.ctrlSock != "" && !sp.hotswapping {
 				toHotswap = append(toHotswap, hwWork{sp, w.bgDir, w.presetDir, w.props, w.previewPath, outName, w.typ})
 				sp.hotswapping = true
@@ -604,6 +619,7 @@ func (r *Renderer) applyLocked(state *DaemonState) {
 					r.mu.Lock()
 					hwSp.bgDir = hwNewBg
 					hwSp.presetDir = hwPresetDir
+					hwSp.props = hwProps
 					hwSp.typ = hwNewTyp
 					hwSp.hotswapping = false
 					r.mu.Unlock()
@@ -768,6 +784,7 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 		output:    outputName,
 		bgDir:     bgDir,
 		presetDir: presetDir,
+		props:     props,
 		ctrlSock:  ctrlSockPath,
 		readyCh:   readyCh,
 	}

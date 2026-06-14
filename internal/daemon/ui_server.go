@@ -166,7 +166,12 @@ function updateUIState() {
 		var didx = (typeof d.location === 'number') ? d.location : di;
 		monitorsArray.push({
 			index: didx,
-			location: didx,
+			// location MUST be a string: WE's property-panel builder (Bt) and
+			// property-change/lastselectedmonitor paths are all gated on
+			// angular.isString(selectedMonitor.location); a numeric location renders
+			// zero property rows. JS object keys coerce to strings so all the
+			// selectedWallpapers[loc] / properties[loc] keying still matches.
+			location: String(didx),
 			name: d.name || ('Monitor' + didx),
 			deviceName: d.deviceName || d.name || ('Monitor' + didx),
 			devicePath: d.devicePath || ('Monitor' + didx),
@@ -199,7 +204,10 @@ function updateUIState() {
 		}
 
 		var wpClone = Object.assign({}, wp);
+		// Per-monitor override map under both the numeric location (what the property
+		// panel and wepBuildDescriptors read) and the MonitorN label.
 		wpClone.properties = {};
+		wpClone.properties[idx] = m.props || {};
 		wpClone.properties[key] = m.props || {};
 
 		// Attach an active rotation playlist (if any) in WE's expected shape so the
@@ -297,30 +305,75 @@ function updateUIState() {
 		window.__wepPlaylistSelected = true;
 	}
 
-	// DIAG (wep-pl): dump the playlist-relevant view state so we can see why a
-	// playlist doesn't open. Forwarded to the daemon log as [JS] [wep-pl] …
-	try {
-		var diag = {
-			mpKeys: state.monitor_playlists ? Object.keys(state.monitor_playlists) : null,
-			savedLen: Array.isArray(state.saved_playlists) ? state.saved_playlists.length : (state.saved_playlists ? 'raw' : 0),
-			layout: state.layout,
-			monitors: (val.monitors || []).map(function(m){
-				var sw = selectedWallpapers[m.location];
-				return {
-					loc: m.location,
-					swPl: (sw && sw.playlist && sw.playlist.items) ? sw.playlist.items.length : 0,
-					monPl: (m.playlist && m.playlist.items) ? m.playlist.items.length : -1,
-					missing: (m.missingPlaylistItems) ? m.missingPlaylistItems.length : -1
-				};
-			}),
-			selMon: val.selectedMonitor ? val.selectedMonitor.location : null,
-			curSelPl: (val.currentSelection && val.currentSelection.playlist && val.currentSelection.playlist.items) ? val.currentSelection.playlist.items.length : -1,
-			wpCount: (val.wallpapers || []).length
-		};
-		console.log('[wep-pl] ' + JSON.stringify(diag));
-	} catch (e) { console.log('[wep-pl] diag err ' + e); }
+	// Populate the property panel. WE's panel renders currentSelection.properties
+	// [location] (a descriptor map) which the native client fills via a host
+	// setWallpaperProperties push after selectWallpaper — that push never happens in
+	// the bridge, so the panel was empty. The schema is already client-side on each
+	// wallpaper (wp.general.properties), so we feed it through setWallpaperProperties
+	// ourselves: once for the wallpaper selected on open, and (via the patch below)
+	// whenever the user picks another wallpaper in the grid.
+	wepInstallPropPatch(val);
+	if (val.currentSelection && val.selectedMonitor) {
+		wepPushProps(val, val.currentSelection);
+	}
 
 	try { val.$apply(); } catch(e){}
+}
+
+// wepBuildDescriptors returns a deep-cloned property descriptor map from a
+// wallpaper's schema (wp.general.properties), with each descriptor's .value
+// overridden by any stored per-monitor override (wp.properties[location], which the
+// daemon seeds with saved overrides). Returns null when the wallpaper has no schema.
+function wepBuildDescriptors(wp, loc) {
+	var schema = (wp && wp.general && wp.general.properties) ? wp.general.properties : null;
+	if (!schema || typeof schema !== 'object') return null;
+	var d;
+	try { d = JSON.parse(JSON.stringify(schema)); } catch (e) { return null; }
+	var ov = wp.properties && wp.properties[loc];
+	if (ov && typeof ov === 'object') {
+		for (var k in d) {
+			if (ov[k] == null) continue;
+			d[k].value = (typeof ov[k] === 'object' && ov[k] && ('value' in ov[k])) ? ov[k].value : ov[k];
+		}
+	}
+	return d;
+}
+
+// wepPushProps fills the property panel for a wallpaper on the selected monitor via
+// WE's own setWallpaperProperties (which sets currentSelection.properties[location]
+// + defaultproperties and rebuilds the panel).
+function wepPushProps(val, wp) {
+	if (!wp || !val.selectedMonitor || typeof val.setWallpaperProperties !== 'function') return;
+	var loc = val.selectedMonitor.location;
+	var d = wepBuildDescriptors(wp, loc);
+	if (!d) return;
+	var defs;
+	try { defs = JSON.parse(JSON.stringify(wp.general.properties)); } catch (e) { defs = d; }
+	val.setWallpaperProperties({
+		file: wp.file,
+		location: loc,
+		properties: d,
+		defaultproperties: defs,
+		presets: [],
+		cancreatepresets: false,
+		aspect: wp.aspect
+	});
+}
+
+// wepInstallPropPatch wraps callbackWallpaperSelected so picking a wallpaper in the
+// grid populates its property panel (the native path relies on a host
+// setWallpaperProperties push that the bridge doesn't make). The population is
+// deferred out of the ng-click digest so it never disturbs WE's selection flow.
+function wepInstallPropPatch(val) {
+	if (!val || val.__wepPropPatched) return;
+	if (typeof val.callbackWallpaperSelected !== 'function') return;
+	val.__wepPropPatched = true;
+	var orig = val.callbackWallpaperSelected.bind(val);
+	val.callbackWallpaperSelected = function(wp) {
+		var r = orig(wp);
+		setTimeout(function() { try { wepPushProps(val, wp); } catch (e) {} }, 0);
+		return r;
+	};
 }
 
 var _browseWallpapersCtrl;

@@ -52,6 +52,11 @@ type WSServer struct {
 
 	favMu sync.Mutex // serializes favorite read-modify-write of the config
 
+	// Debounce for property edits: dragging a slider fires many applySingleProperty
+	// calls; state is updated immediately but the renderer re-apply (reload) coalesces.
+	applyDebMu    sync.Mutex
+	applyDebTimer *time.Timer
+
 	// sessionBaseline is a snapshot of the state when the browse UI last opened,
 	// used to roll back on Cancel (cancelAndClose).
 	sessionBaseline *DaemonState
@@ -376,6 +381,10 @@ func (s *WSServer) handleBrowse(conn *websocket.Conn, msg WEMessage) {
 		s.onPlaylistsChanged(msg.Args)
 	case "transferWallpaperProperties":
 		s.onTransferWallpaper(msg.Args)
+	case "applySingleProperty":
+		s.onApplyProperty(msg.Args)
+	case "resetWallpaperLocalStorage":
+		s.onResetProperties(msg.Args)
 	case "queryWorkshop":
 		s.handleQueryWorkshop(conn, msg)
 	case "persistUserMonitorSettings":
@@ -975,6 +984,147 @@ func (s *WSServer) onTransferWallpaper(args []interface{}) {
 	}
 	log.Printf("[WE] transfer %s → %s (swap=%v)", src, dst, swap)
 	go s.renderer.Apply(snap)
+}
+
+// propValueToString converts a WE property descriptor value to the string form
+// linux-wallpaperengine's --set-property expects (color stays "r g b", bool→1/0,
+// number→plain). Returns false for values we can't represent (null, objects).
+func propValueToString(v interface{}) (string, bool) {
+	switch val := v.(type) {
+	case bool:
+		if val {
+			return "1", true
+		}
+		return "0", true
+	case float64:
+		return strconv.FormatFloat(val, 'f', -1, 64), true
+	case string:
+		return val, true
+	}
+	return "", false
+}
+
+// scheduleApply debounces a renderer re-apply so a burst of property edits (slider
+// drag) coalesces into a single reload.
+func (s *WSServer) scheduleApply() {
+	s.applyDebMu.Lock()
+	if s.applyDebTimer != nil {
+		s.applyDebTimer.Stop()
+	}
+	s.applyDebTimer = time.AfterFunc(250*time.Millisecond, func() {
+		s.stateMu.Lock()
+		snap := s.state.snapshot()
+		s.stateMu.Unlock()
+		s.renderer.Apply(snap)
+	})
+	s.applyDebMu.Unlock()
+}
+
+// onApplyProperty handles browseWallpaperObject.applySingleProperty(jsonString):
+// the user changed a wallpaper property in the UI. Merge the new value(s) into the
+// monitor's Props, persist, and re-render (debounced). The payload is
+// {file, location, properties:{key:{value,…}}}.
+func (s *WSServer) onApplyProperty(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	raw, ok := args[0].(string)
+	if !ok {
+		b, err := json.Marshal(args[0]) // some clients send an object, not a string
+		if err != nil {
+			return
+		}
+		raw = string(b)
+	}
+	var payload struct {
+		File       string                            `json:"file"`
+		Location   interface{}                       `json:"location"`
+		Properties map[string]struct{ Value interface{} `json:"value"` } `json:"properties"`
+	}
+	if json.Unmarshal([]byte(raw), &payload) != nil || len(payload.Properties) == 0 {
+		return
+	}
+	monitor := monitorLabelFromArg(payload.Location)
+	if monitor == "" {
+		return
+	}
+
+	s.stateMu.Lock()
+	mw := s.state.Monitors[monitor]
+	if mw == nil {
+		s.stateMu.Unlock()
+		return
+	}
+	// Build the merged props map (copy-on-write: the *MonitorWallpaper is shared with
+	// the renderer via snapshots and must never be mutated in place).
+	merged := make(map[string]string, len(mw.Props)+len(payload.Properties))
+	for k, v := range mw.Props {
+		merged[k] = v
+	}
+	for k, d := range payload.Properties {
+		if sv, ok := propValueToString(d.Value); ok {
+			merged[k] = sv
+		}
+	}
+	apply := func(label string) {
+		if cur := s.state.Monitors[label]; cur != nil {
+			c := *cur
+			c.Props = merged
+			s.state.Monitors[label] = &c
+		}
+	}
+	if s.state.Layout == layoutClone {
+		for _, label := range s.allMonitorLabels() {
+			apply(label)
+		}
+	} else {
+		apply(monitor)
+	}
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	s.stateMu.Unlock()
+
+	log.Printf("[WE] property change on %s (%d key(s))", monitor, len(payload.Properties))
+	s.scheduleApply()
+}
+
+// onResetProperties handles browseWallpaperObject.resetWallpaperLocalStorage(file):
+// the user reset a wallpaper's properties. Restore the monitor(s) showing that file
+// to the wallpaper's default props (re-resolved from project.json), then re-render.
+func (s *WSServer) onResetProperties(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	file, _ := args[0].(string)
+	if file == "" {
+		return
+	}
+	s.stateMu.Lock()
+	changed := false
+	for label, mw := range s.state.Monitors {
+		if mw == nil || (mw.WinPath != file && mw.LinuxPath != file) {
+			continue
+		}
+		c := *mw
+		if def := s.resolveWallpaper(mw.WinPath, label); def != nil {
+			c.Props = def.Props
+		} else {
+			c.Props = nil
+		}
+		s.state.Monitors[label] = &c
+		changed = true
+	}
+	if changed {
+		if err := saveState(s.state); err != nil {
+			log.Printf("[wepapered] state save error: %v", err)
+		}
+	}
+	s.stateMu.Unlock()
+	if changed {
+		log.Printf("[WE] reset properties for %s", file)
+		s.scheduleApply()
+	}
 }
 
 // sendHostedUIData pushes the wallpaper library and the translation table to a
