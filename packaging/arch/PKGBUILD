@@ -129,6 +129,10 @@ package() {
 	install -Dm644 "${srcdir}/wepapered-settings.desktop" \
 		"${pkgdir}/usr/share/applications/wepapered-settings.desktop"
 
+	# App icon (referenced as Icon=wepapered by the desktop entries). pixmaps is the
+	# size-agnostic fallback location, so the 1024x1024 logo needs no resize tooling.
+	install -Dm644 assets/logo.png "${pkgdir}/usr/share/pixmaps/wepapered.png"
+
 	# systemd user service.
 	install -Dm644 "${srcdir}/wepapered.service" \
 		"${pkgdir}/usr/lib/systemd/user/wepapered.service"

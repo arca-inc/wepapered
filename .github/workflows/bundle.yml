@@ -67,6 +67,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist/wepapered
           cp bin/wepapered-daemon bin/wepapered-gui bin/wepapered-settings bin/wepaperedctl dist/wepapered/
+          # Ship the static assets (logo / app icon) alongside the binaries. The tray
+          # icon is embedded in the daemon, so this is for desktop-entry icons and
+          # anything that wants the logo as a file.
+          cp -a assets dist/wepapered/
           # Colocate the LWE runtime next to the binaries (paths.go expects
           # linux-wallpaperengine to sit beside the executable in a packaged install).
           cp -a lwe/build/output/. dist/wepapered/

@@ -8,6 +8,7 @@ import (
 
 	"fyne.io/systray"
 
+	"wepapered/assets"
 	"wepapered/internal/core"
 )
 
@@ -24,14 +25,8 @@ func (t *TrayManager) Run() {
 }
 
 func (t *TrayManager) onReady() {
-	// Try to load the WE icon.
-	iconPath := filepath.Join(t.cfg.WEPath, "ui", "dist", "favicon.ico")
-	if iconData, err := os.ReadFile(iconPath); err == nil {
-		systray.SetIcon(iconData)
-	} else {
-		systray.SetTitle("WE")
-	}
-
+	// Embedded WePapered logo (assets/tray.png) — no dependence on a runtime path.
+	systray.SetIcon(assets.TrayPNG)
 	systray.SetTooltip("WePapered - Wallpaper Engine for Linux")
 
 	mBrowse := systray.AddMenuItem("Change Wallpapers...", "Open the WE UI to browse installed wallpapers")
