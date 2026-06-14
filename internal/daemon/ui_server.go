@@ -559,6 +559,9 @@ BRIDGE_OBJECTS.forEach(function(name) {
 			help-overlay, .ui-tutorial, [class*="tutorial"], .welcome-screen { display: none !important; }
 			.popover, .tooltip { display: none !important; opacity: 0 !important; }
 			[translate^="ui_browse_advertise"] { display: none !important; }
+			/* Hide the "Mobile" (manage mobile devices) header button — unsupported here. */
+			a[tooltip="ui_browse_header_option_mobile_devices"],
+			.headerBtn:has(> a[tooltip="ui_browse_header_option_mobile_devices"]) { display: none !important; }
 		</style>`
 		
 		injected := bytes.Replace(content, []byte("<head>"), []byte("<head>"+shim), 1)

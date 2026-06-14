@@ -17,6 +17,11 @@ var (
 	lweOutputDir     = core.LWEOutputDir
 	lwebin           = core.LWEBin
 	lwesubprocessbin = core.LWESubprocessBin
+
+	siblingBinary = core.SiblingBinary
 )
 
-const controlAddr = core.ControlAddr
+const (
+	controlAddr    = core.ControlAddr
+	settingsBinary = core.SettingsBinary
+)

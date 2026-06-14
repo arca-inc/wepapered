@@ -483,22 +483,25 @@ func (s *WSServer) onOpenInExplorer(args []interface{}) {
 	exec.Command("xdg-open", dir).Start() //nolint
 }
 
-// openConfigWindow launches the wepapered GTK configuration window (--config).
-// Triggered by the WE UI's Settings button (showSettingsDialog). GTK3 runs under
-// Wayland, so this can spawn from the daemon process directly.
+// openConfigWindow launches the wepapered-settings GTK window. Triggered by the
+// WE UI's Settings button (showSettingsDialog). Settings is its own binary since
+// the four-binary split, so launch the sibling binary (not the daemon itself).
+// GTK3 runs under Wayland, so this can spawn from the daemon process directly.
 func (s *WSServer) openConfigWindow() {
-	exe, err := os.Executable()
-	if err != nil {
-		log.Printf("[wepapered] cannot find executable for config window: %v", err)
+	bin := siblingBinary(settingsBinary)
+	if bin == "" {
+		log.Printf("[wepapered] settings binary (%s) not found", settingsBinary)
 		return
 	}
-	cmd := exec.Command(exe, "--config")
+	cmd := exec.Command(bin)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
-		log.Printf("[wepapered] failed to open config window: %v", err)
+		log.Printf("[wepapered] failed to open settings window: %v", err)
 		return
 	}
 	go cmd.Wait()
-	log.Printf("[WE] showSettingsDialog → opened wepapered config")
+	log.Printf("[WE] showSettingsDialog → launched %s", settingsBinary)
 }
 
 // onPersistBrowserSettings saves WE's browserSettings object (sent as a JSON
