@@ -68,9 +68,17 @@ func Run() {
 	go ws.discord.Run()
 	ws.updateDiscordPresence()
 
+	// Resume per-monitor playlists (arms rotation timers and mirrors each
+	// playlist's current item into state) before the initial render.
+	ws.playlists.StartAll()
+
 	// Apply saved wallpapers immediately on startup.
-	if len(ws.state.Monitors) > 0 {
-		go ws.renderer.Apply(ws.state)
+	ws.stateMu.Lock()
+	startSnap := ws.state.snapshot()
+	startN := len(ws.state.Monitors)
+	ws.stateMu.Unlock()
+	if startN > 0 {
+		go ws.renderer.Apply(startSnap)
 	}
 
 	// Watchdog: re-apply when a screen process dies unexpectedly.
@@ -109,6 +117,7 @@ func Run() {
 	tray.Run()
 
 	log.Println("[wepapered] stopping")
+	ws.playlists.Stop()
 	w.Stop()
 	ws.renderer.Stop()
 	ws.discord.Close()

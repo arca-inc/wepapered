@@ -92,6 +92,25 @@ console.log = function() {
 	origConsoleLog.apply(console, arguments);
 };
 
+// toWEPlaylist converts the daemon's stored playlist ({name, settings, items:
+// [{file,daytimeend,preset}], index}) into WE's deserialize shape: items become a
+// bare file string, or {file, daytimeend?, preset?} when those extras are present.
+function toWEPlaylist(mpl) {
+	return {
+		name: mpl.name || "",
+		settings: mpl.settings || {},
+		items: (mpl.items || []).map(function(it) {
+			if (typeof it.daytimeend === 'number' || typeof it.preset === 'string') {
+				var o = { file: it.file };
+				if (typeof it.daytimeend === 'number') o.daytimeend = it.daytimeend;
+				if (typeof it.preset === 'string') o.preset = it.preset;
+				return o;
+			}
+			return it.file;
+		})
+	};
+}
+
 function updateUIState() {
 	var val = window.browseWallpapersCtrl;
 	var state = window.daemonState;
@@ -183,6 +202,13 @@ function updateUIState() {
 		wpClone.properties = {};
 		wpClone.properties[key] = m.props || {};
 
+		// Attach an active rotation playlist (if any) in WE's expected shape so the
+		// monitor shows the playlist instead of a single wallpaper.
+		var mpl = (state.monitor_playlists && state.monitor_playlists[key]) ? state.monitor_playlists[key] : null;
+		if (mpl && mpl.items && mpl.items.length > 1) {
+			wpClone.playlist = toWEPlaylist(mpl);
+		}
+
 		selectedWallpapers[idx] = wpClone;
 		if (m.device_path) selectedWallpapers[m.device_path] = wpClone;
 		selectedWallpapers[key] = wpClone;
@@ -200,7 +226,7 @@ function updateUIState() {
 
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: (state.layout || 0) }, browser: { advertiseworkshop: false, advertiseexplore: false, advertiseworkshoppopup: false, advertisesendtomobile: false, defaultfilterconfig: ffc } },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: (state.layout || 0) }, playlists: (state.saved_playlists || []), browser: { advertiseworkshop: false, advertiseexplore: false, advertiseworkshoppopup: false, advertisesendtomobile: false, defaultfilterconfig: ffc } },
 		{},
 		false
 	);
@@ -218,7 +244,82 @@ function updateUIState() {
 	if (val.selectedMonitor && selectedWallpapers[val.selectedMonitor.location]) {
 		val.currentSelection = selectedWallpapers[val.selectedMonitor.location];
 	}
-	
+
+	// Build each monitor's in-memory playlist directly. WE's own config→monitor
+	// playlist resolution (selectedwallpapers[loc].playlist → monitor.playlist via
+	// Oe) only runs on its native wallpapers-loaded event, which never fires in the
+	// hosted bridge — so monitor.playlist stayed empty (diag: monPl:0, missing:-1)
+	// and the playlist view (driven by selectedMonitor.playlist) showed nothing.
+	// WE's in-memory item shape is { wallpaper: <libObject>, daytimeend?, preset? }
+	// plus a playlistFlags lookup; Ue() treats >1 items as a real playlist.
+	var plLib = val.wallpapers || [];
+	function wepFindWp(f) {
+		for (var i = 0; i < plLib.length; i++) { if (plLib[i].file === f) return plLib[i]; }
+		return null;
+	}
+	var firstPlaylistMon = null;
+	if (Array.isArray(val.monitors)) {
+		for (var mpi = 0; mpi < val.monitors.length; mpi++) {
+			var mon = val.monitors[mpi];
+			var msw = selectedWallpapers[mon.location];
+			if (!(msw && msw.playlist && msw.playlist.items && msw.playlist.items.length > 1)) continue;
+			var built = [];
+			for (var ii = 0; ii < msw.playlist.items.length; ii++) {
+				var rawIt = msw.playlist.items[ii];
+				var f = (typeof rawIt === 'string') ? rawIt : rawIt.file;
+				var wp = wepFindWp(f);
+				if (!wp) continue;
+				var ent = { wallpaper: wp };
+				if (typeof rawIt === 'object') {
+					if (typeof rawIt.daytimeend === 'number') ent.daytimeend = rawIt.daytimeend;
+					if (typeof rawIt.preset === 'string') ent.preset = rawIt.preset;
+				}
+				built.push(ent);
+			}
+			if (built.length > 1) {
+				mon.playlist = { items: built, settings: msw.playlist.settings || {}, name: msw.playlist.name || "" };
+				mon.playlistFlags = {};
+				for (var bi = 0; bi < built.length; bi++) { mon.playlistFlags[built[bi].wallpaper.file] = true; }
+				if (!firstPlaylistMon) firstPlaylistMon = mon;
+			}
+		}
+	}
+
+	// Open on the active playlist: select the monitor that has one so the playlist
+	// view is shown by default (set directly, not via callbackSelectMonitor, which
+	// only selects when layout===0 and no-ops in clone/stretch mode). Once a playlist
+	// is actually built (library present), finalize so a later state push doesn't
+	// yank the user back here.
+	if (!window.__wepPlaylistSelected && firstPlaylistMon) {
+		val.selectedMonitor = firstPlaylistMon;
+		val.currentSelection = selectedWallpapers[firstPlaylistMon.location];
+		if (val.browserSettings) val.browserSettings.lastselectedmonitor = firstPlaylistMon.location;
+		window.__wepPlaylistSelected = true;
+	}
+
+	// DIAG (wep-pl): dump the playlist-relevant view state so we can see why a
+	// playlist doesn't open. Forwarded to the daemon log as [JS] [wep-pl] …
+	try {
+		var diag = {
+			mpKeys: state.monitor_playlists ? Object.keys(state.monitor_playlists) : null,
+			savedLen: Array.isArray(state.saved_playlists) ? state.saved_playlists.length : (state.saved_playlists ? 'raw' : 0),
+			layout: state.layout,
+			monitors: (val.monitors || []).map(function(m){
+				var sw = selectedWallpapers[m.location];
+				return {
+					loc: m.location,
+					swPl: (sw && sw.playlist && sw.playlist.items) ? sw.playlist.items.length : 0,
+					monPl: (m.playlist && m.playlist.items) ? m.playlist.items.length : -1,
+					missing: (m.missingPlaylistItems) ? m.missingPlaylistItems.length : -1
+				};
+			}),
+			selMon: val.selectedMonitor ? val.selectedMonitor.location : null,
+			curSelPl: (val.currentSelection && val.currentSelection.playlist && val.currentSelection.playlist.items) ? val.currentSelection.playlist.items.length : -1,
+			wpCount: (val.wallpapers || []).length
+		};
+		console.log('[wep-pl] ' + JSON.stringify(diag));
+	} catch (e) { console.log('[wep-pl] diag err ' + e); }
+
 	try { val.$apply(); } catch(e){}
 }
 

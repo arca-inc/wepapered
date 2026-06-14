@@ -23,9 +23,43 @@ type MonitorWallpaper struct {
 	Props       map[string]string `json:"props,omitempty"`        // preset property overrides
 }
 
+// PlaylistSettings mirrors WE's per-monitor playlist `settings` object.
+type PlaylistSettings struct {
+	Delay          int    `json:"delay"`           // minutes between swaps (timer mode)
+	Order          string `json:"order"`           // "random" | "sorted"
+	Mode           string `json:"mode"`            // "timer" | "daytime" | "dayofweek" | "logon" | "never"
+	Transition     string `json:"transition,omitempty"`
+	TransitionTime int    `json:"transitiontime,omitempty"`
+	VideoSequence  bool   `json:"videosequence,omitempty"`
+	UpdateOnPause  bool   `json:"updateonpause,omitempty"`
+}
+
+// PlaylistItem is one entry of a monitor playlist. File is the identity (a WE
+// Windows path or a Linux path, as the UI sent it). DaytimeEnd/Preset carry the
+// extra per-item data WE attaches in daytime/preset playlists.
+type PlaylistItem struct {
+	File       string  `json:"file"`
+	DaytimeEnd float64 `json:"daytimeend,omitempty"` // daytime mode: end-of-slot as fraction of day (0..1)
+	Preset     string  `json:"preset,omitempty"`
+}
+
+// MonitorPlaylist is an active per-monitor rotation. The renderer never sees it —
+// the playlist engine resolves the current item into state.Monitors[label] and
+// re-renders, so the renderer keeps its one-wallpaper-per-monitor contract.
+type MonitorPlaylist struct {
+	Name     string           `json:"name,omitempty"`
+	Settings PlaylistSettings `json:"settings"`
+	Items    []PlaylistItem   `json:"items"`
+	Index    int              `json:"index"` // rotation cursor (which item is current)
+}
+
 type DaemonState struct {
 	Monitors map[string]*MonitorWallpaper `json:"monitors"` // key = Monitor0, Monitor1…
-	WEPath   string                       `json:"we_path"`
+	// MonitorPlaylists holds the active rotation playlist per monitor (same key
+	// space as Monitors). A monitor has EITHER a single wallpaper or a playlist;
+	// when a playlist is active its current item is mirrored into Monitors[label].
+	MonitorPlaylists map[string]*MonitorPlaylist `json:"monitor_playlists,omitempty"`
+	WEPath           string                      `json:"we_path"`
 	// Layout mirrors WE's wallpaperConfig.layout: 0 = per-monitor, 1 = stretch a
 	// single wallpaper across all displays, 2 = clone the same wallpaper on each.
 	Layout int `json:"layout"`
@@ -33,6 +67,9 @@ type DaemonState struct {
 	// page, showmonitorselectiononstart, …) persisted verbatim so UI preferences
 	// survive restarts. Restored into the UI on load.
 	BrowserSettings json.RawMessage `json:"browser_settings,omitempty"`
+	// SavedPlaylists is WE's named-playlist library (the `playlists` array) stored
+	// verbatim so it round-trips back into the UI. Updated via playlistsChanged.
+	SavedPlaylists json.RawMessage `json:"saved_playlists,omitempty"`
 }
 
 // snapshot returns an independent copy for rollback. The map entries are never
@@ -40,15 +77,27 @@ type DaemonState struct {
 // copying the map with the same pointers is safe.
 func (st *DaemonState) snapshot() *DaemonState {
 	cp := &DaemonState{
-		Monitors:        make(map[string]*MonitorWallpaper, len(st.Monitors)),
-		WEPath:          st.WEPath,
-		Layout:          st.Layout,
-		BrowserSettings: st.BrowserSettings,
+		Monitors:         make(map[string]*MonitorWallpaper, len(st.Monitors)),
+		MonitorPlaylists: make(map[string]*MonitorPlaylist, len(st.MonitorPlaylists)),
+		WEPath:           st.WEPath,
+		Layout:           st.Layout,
+		BrowserSettings:  st.BrowserSettings,
+		SavedPlaylists:   st.SavedPlaylists,
 	}
 	for k, v := range st.Monitors {
 		cp.Monitors[k] = v
 	}
+	for k, v := range st.MonitorPlaylists {
+		cp.MonitorPlaylists[k] = v
+	}
 	return cp
+}
+
+func newDaemonState() *DaemonState {
+	return &DaemonState{
+		Monitors:         make(map[string]*MonitorWallpaper),
+		MonitorPlaylists: make(map[string]*MonitorPlaylist),
+	}
 }
 
 func statePath() string {
@@ -59,14 +108,17 @@ func statePath() string {
 func loadState() *DaemonState {
 	data, err := os.ReadFile(statePath())
 	if err != nil {
-		return &DaemonState{Monitors: make(map[string]*MonitorWallpaper)}
+		return newDaemonState()
 	}
 	var s DaemonState
 	if err := json.Unmarshal(data, &s); err != nil {
-		return &DaemonState{Monitors: make(map[string]*MonitorWallpaper)}
+		return newDaemonState()
 	}
 	if s.Monitors == nil {
 		s.Monitors = make(map[string]*MonitorWallpaper)
+	}
+	if s.MonitorPlaylists == nil {
+		s.MonitorPlaylists = make(map[string]*MonitorPlaylist)
 	}
 	// Upgrade: infer type and render dir for entries saved without them.
 	for _, mw := range s.Monitors {

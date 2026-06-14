@@ -122,7 +122,13 @@ func (w *Watcher) Stop() {
 
 func (w *Watcher) handleChange(path string) {
 	// Check if WE cleared our selectedwallpapers.
-	if w.ws != nil && len(w.ws.state.Monitors) > 0 {
+	hasMonitors := false
+	if w.ws != nil {
+		w.ws.stateMu.Lock()
+		hasMonitors = len(w.ws.state.Monitors) > 0
+		w.ws.stateMu.Unlock()
+	}
+	if hasMonitors {
 		if weCleared(path) {
 			log.Printf("[wepapered] WE cleared selectedwallpapers — scheduling reapply")
 			w.scheduleReapply()
@@ -163,10 +169,14 @@ func (w *Watcher) scheduleReapply() {
 		w.reapply.Stop()
 	}
 	w.reapply = time.AfterFunc(300*time.Millisecond, func() {
-		if err := writeWESelectedWallpapers(wepath, w.ws.state.Monitors, w.ws.monitorInfos); err != nil {
+		w.ws.stateMu.Lock()
+		err := writeWESelectedWallpapers(wepath, w.ws.state.Monitors, w.ws.monitorInfos)
+		n := len(w.ws.state.Monitors)
+		w.ws.stateMu.Unlock()
+		if err != nil {
 			log.Printf("[wepapered] reapply error: %v", err)
 		} else {
-			log.Printf("[wepapered] selectedwallpapers reapplied (%d monitor(s))", len(w.ws.state.Monitors))
+			log.Printf("[wepapered] selectedwallpapers reapplied (%d monitor(s))", n)
 		}
 	})
 }

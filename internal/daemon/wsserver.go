@@ -43,6 +43,12 @@ type WSServer struct {
 	renderer     *Renderer
 	watcher      *Watcher // set in run.go; lets reload re-point the config watch
 	discord      *DiscordRP
+	playlists    *PlaylistEngine // per-monitor wallpaper rotation
+
+	// stateMu guards all access to s.state (its maps and fields) and serializes the
+	// persist+snapshot sequence, since the playlist engine mutates state from timer
+	// goroutines concurrently with the websocket dispatch goroutines.
+	stateMu sync.Mutex
 
 	favMu sync.Mutex // serializes favorite read-modify-write of the config
 
@@ -65,6 +71,7 @@ func newWSServer(cfg *Config) *WSServer {
 		discord:  newDiscordRP(),
 	}
 	s.cfg.Store(cfg)
+	s.playlists = newPlaylistEngine(s)
 	return s
 }
 
@@ -176,7 +183,10 @@ func (s *WSServer) handleReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	log.Printf("[wepapered] reload requested — reloading config and relaunching renderers")
-	go s.renderer.Reload(s.state.snapshot())
+	s.stateMu.Lock()
+	reloadSnap := s.state.snapshot()
+	s.stateMu.Unlock()
+	go s.renderer.Reload(reloadSnap)
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, "reloaded")
@@ -192,14 +202,19 @@ func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	log.Printf("[wepapered] UI connected (%s)", r.RemoteAddr)
 
-	// Snapshot the state as the rollback baseline for this browse session (Cancel).
+	// Snapshot the state as the rollback baseline for this browse session (Cancel),
+	// and as a stable value to marshal (the playlist engine may mutate s.state from
+	// timer goroutines concurrently).
+	s.stateMu.Lock()
 	s.sessionBaseline = s.state.snapshot()
-
-	// Send current state immediately so the inject script can restore active wallpapers.
-	if stateData, err := json.Marshal(map[string]interface{}{
+	stateData, _ := json.Marshal(map[string]interface{}{
 		"type":  "state",
 		"state": s.state,
-	}); err == nil {
+	})
+	s.stateMu.Unlock()
+
+	// Send current state immediately so the inject script can restore active wallpapers.
+	if stateData != nil {
 		conn.WriteMessage(websocket.TextMessage, stateData)
 	}
 
@@ -318,6 +333,7 @@ func (s *WSServer) handleCallbackMessage(conn *websocket.Conn, msg WEMessage) {
 			}
 		} else {
 			// Fallback: build from saved state labels.
+			s.stateMu.Lock()
 			loc := 0
 			for label := range s.state.Monitors {
 				idx := loc
@@ -337,6 +353,7 @@ func (s *WSServer) handleCallbackMessage(conn *websocket.Conn, msg WEMessage) {
 				})
 				loc++
 			}
+			s.stateMu.Unlock()
 		}
 
 		reply, _ := json.Marshal(map[string]interface{}{
@@ -351,6 +368,14 @@ func (s *WSServer) handleBrowse(conn *websocket.Conn, msg WEMessage) {
 	switch msg.Method {
 	case "selectWallpaper":
 		s.onSelectWallpaper(msg.Args)
+	case "selectPlaylist":
+		s.onSelectPlaylist(msg.Args)
+	case "removeWallpaper":
+		s.onRemoveWallpaper(msg.Args)
+	case "playlistsChanged":
+		s.onPlaylistsChanged(msg.Args)
+	case "transferWallpaperProperties":
+		s.onTransferWallpaper(msg.Args)
 	case "queryWorkshop":
 		s.handleQueryWorkshop(conn, msg)
 	case "persistUserMonitorSettings":
@@ -388,21 +413,23 @@ func (s *WSServer) onChangeLayout(args []interface{}) {
 	if !ok {
 		return
 	}
+	s.stateMu.Lock()
 	s.state.Layout = int(v)
 	log.Printf("[WE] layout → %d", s.state.Layout)
-	if err := saveState(s.state); err != nil {
-		log.Printf("[wepapered] state save error: %v", err)
-	}
-
 	// Re-clone the current wallpaper onto every display right away so toggling to
 	// clone mode takes effect without re-picking.
+	apply := false
 	if s.state.Layout == layoutClone {
 		if src := s.anyMonitorWallpaper(); src != nil {
 			s.cloneToAllOutputs(src)
-			saveState(s.state) //nolint
-			writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos) //nolint
-			go s.renderer.Apply(s.state)
+			apply = true
 		}
+	}
+	s.persistLocked()
+	snap := s.state.snapshot()
+	s.stateMu.Unlock()
+	if apply {
+		go s.renderer.Apply(snap)
 	}
 }
 
@@ -526,23 +553,22 @@ func (s *WSServer) onPersistBrowserSettings(args []interface{}) {
 		log.Printf("[WE] persistBrowserSettings: invalid JSON, ignored")
 		return
 	}
+	s.stateMu.Lock()
 	s.state.BrowserSettings = raw
 	if err := saveState(s.state); err != nil {
 		log.Printf("[wepapered] state save error: %v", err)
 	}
+	s.stateMu.Unlock()
 	log.Printf("[WE] browser settings persisted (%d bytes)", len(raw))
 }
 
 // onAcceptAndClose commits the current selections (OK button): persist state and
 // re-write WE's config, and adopt the current state as the new rollback baseline.
 func (s *WSServer) onAcceptAndClose() {
-	if err := saveState(s.state); err != nil {
-		log.Printf("[wepapered] state save error: %v", err)
-	}
-	if err := writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos); err != nil {
-		log.Printf("[wepapered] WE config write error: %v", err)
-	}
+	s.stateMu.Lock()
+	s.persistLocked()
 	s.sessionBaseline = s.state.snapshot()
+	s.stateMu.Unlock()
 	log.Printf("[WE] acceptAndClose — settings saved")
 }
 
@@ -550,21 +576,29 @@ func (s *WSServer) onAcceptAndClose() {
 // (Cancel button), re-rendering the original wallpapers. Best-effort: if no
 // baseline was captured, nothing changes.
 func (s *WSServer) onCancelAndClose() {
+	s.stateMu.Lock()
 	if s.sessionBaseline == nil {
+		s.stateMu.Unlock()
 		log.Printf("[WE] cancelAndClose — no baseline, nothing to roll back")
 		return
 	}
 	restored := s.sessionBaseline.snapshot() // independent copy; keep baseline intact
 	s.state.Monitors = restored.Monitors
+	s.state.MonitorPlaylists = restored.MonitorPlaylists
 	s.state.Layout = restored.Layout
-	if err := saveState(s.state); err != nil {
-		log.Printf("[wepapered] state save error: %v", err)
-	}
-	if err := writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos); err != nil {
-		log.Printf("[wepapered] WE config write error: %v", err)
-	}
+	s.persistLocked()
+	s.stateMu.Unlock()
+
+	// Restart rotation from the restored playlists (timers created during the
+	// cancelled session are stopped; the restored ones are re-armed).
+	s.playlists.Stop()
+	s.playlists.StartAll()
+
+	s.stateMu.Lock()
+	snap := s.state.snapshot()
+	s.stateMu.Unlock()
 	log.Printf("[WE] cancelAndClose — rolled back to baseline")
-	go s.renderer.Apply(s.state)
+	go s.renderer.Apply(snap)
 }
 
 func (s *WSServer) handleSettings(conn *websocket.Conn, msg WEMessage) {
@@ -583,14 +617,11 @@ func (s *WSServer) handleSettings(conn *websocket.Conn, msg WEMessage) {
 	}
 }
 
-func (s *WSServer) onSelectWallpaper(args []interface{}) {
-	if len(args) < 2 {
-		return
-	}
-	winPath, _ := args[0].(string)
-	
+// monitorLabelFromArg normalizes the WE selectWallpaper monitor argument (a label
+// string, a numeric location, or a {location} object) to a "MonitorN" label.
+func monitorLabelFromArg(arg interface{}) string {
 	monitor := ""
-	switch v := args[1].(type) {
+	switch v := arg.(type) {
 	case string:
 		monitor = v
 	case float64:
@@ -602,26 +633,31 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 			monitor = locStr
 		}
 	}
-	
 	if _, err := strconv.Atoi(monitor); err == nil {
 		monitor = "Monitor" + monitor
 	}
+	return monitor
+}
 
-	if winPath == "" || monitor == "" {
-		log.Printf("[WE] ERROR: selectWallpaper ignored (winPath=%q, monitor=%q, rawArg1=%v)", winPath, monitor, args[1])
-		return
+// resolveWallpaper turns a wallpaper path (a Linux directory from the hosted UI, or
+// a Windows S:/Z: path from the legacy spy) plus a target monitor label into a fully
+// resolved *MonitorWallpaper (type, render/preset dirs, props, device path). Returns
+// nil for an empty path. Pure: no state mutation, no lock — safe to call from the
+// playlist engine while resolving items.
+func (s *WSServer) resolveWallpaper(winPath, monitor string) *MonitorWallpaper {
+	if winPath == "" {
+		return nil
 	}
-
 	// The hosted UI sends the Linux directory path directly; the legacy WE inject
 	// spy sends a Windows path (S:/…, Z:/…) that needs translation.
 	linuxPath := winPath
-	if len(winPath) == 0 || winPath[0] != '/' {
+	if winPath[0] != '/' {
 		linuxPath = winToLinux(winPath, s.cfg.Load().WEPath)
 	}
 	workshopID := workshopIDFromPath(winPath)
 	meta := readProjectMeta(linuxPath)
 
-	// If type is still unknown, try the dependency workshop item.
+	// If type is still unknown, try the dependency workshop item (preset wallpaper).
 	renderDir := ""
 	presetDir := ""
 	var props map[string]string
@@ -640,7 +676,6 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		}
 	}
 
-	// Resolve device path for this monitor label (e.g. Monitor0 → location 0 → device path)
 	devicePath := ""
 	loc := -1
 	fmt.Sscanf(monitor, "Monitor%d", &loc)
@@ -666,29 +701,280 @@ func (s *WSServer) onSelectWallpaper(args []interface{}) {
 		mw.Type = meta.Type
 		mw.PreviewFile = meta.Preview
 	}
+	return mw
+}
 
-	// In clone mode the same wallpaper goes on every display; otherwise just the
-	// selected one.
+// persistLocked saves state.json and mirrors the current per-monitor wallpapers
+// into WE's config.json. Caller must hold stateMu.
+func (s *WSServer) persistLocked() {
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	if err := writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos); err != nil {
+		log.Printf("[wepapered] WE config write error: %v", err)
+	}
+}
+
+func (s *WSServer) onSelectWallpaper(args []interface{}) {
+	if len(args) < 2 {
+		return
+	}
+	winPath, _ := args[0].(string)
+	monitor := monitorLabelFromArg(args[1])
+	if winPath == "" || monitor == "" {
+		log.Printf("[WE] ERROR: selectWallpaper ignored (winPath=%q, monitor=%q, rawArg1=%v)", winPath, monitor, args[1])
+		return
+	}
+
+	mw := s.resolveWallpaper(winPath, monitor)
+	if mw == nil {
+		return
+	}
+
+	s.stateMu.Lock()
+	// A single selection replaces any playlist that was rotating this monitor.
+	s.playlists.stopTimer(monitor)
+	delete(s.state.MonitorPlaylists, monitor)
 	if s.state.Layout == layoutClone {
+		// Clone mode mirrors one wallpaper everywhere, so it also retires every
+		// other monitor's playlist.
+		for _, label := range s.allMonitorLabels() {
+			if label != monitor {
+				s.playlists.stopTimer(label)
+				delete(s.state.MonitorPlaylists, label)
+			}
+		}
 		s.cloneToAllOutputs(mw)
 	} else {
 		s.state.Monitors[monitor] = mw
 	}
-	if err := saveState(s.state); err != nil {
-		log.Printf("[wepapered] state save error: %v", err)
-	}
+	s.persistLocked()
+	snap := s.state.snapshot()
+	s.stateMu.Unlock()
 
-	// Write back into WE's config.json so it remembers on next startup.
-	if err := writeWESelectedWallpapers(s.cfg.Load().WEPath, s.state.Monitors, s.monitorInfos); err != nil {
-		log.Printf("[wepapered] WE config write error: %v", err)
-	}
-
-	log.Printf("[WE] *** %s → %s (%s) [%s]", monitor, mw.Title, mw.Type, workshopID)
+	log.Printf("[WE] *** %s → %s (%s) [%s]", monitor, mw.Title, mw.Type, mw.WorkshopID)
 	notifyUser(fmt.Sprintf("%s: %s", monitor, mw.Title))
 	s.updateDiscordPresence()
 
 	// Apply wallpapers via linux-wallpaperengine.
-	go s.renderer.Apply(s.state)
+	go s.renderer.Apply(snap)
+}
+
+// parsePlaylistSettings reads WE's playlist `settings` object, defaulting to a
+// random 60-minute timer.
+func parsePlaylistSettings(s map[string]interface{}) PlaylistSettings {
+	ps := PlaylistSettings{Order: "random", Mode: "timer", Delay: 60}
+	if v, ok := s["delay"].(float64); ok {
+		ps.Delay = int(v)
+	}
+	if v, ok := s["order"].(string); ok && v != "" {
+		ps.Order = v
+	}
+	if v, ok := s["mode"].(string); ok && v != "" {
+		ps.Mode = v
+	}
+	if v, ok := s["transition"].(string); ok {
+		ps.Transition = v
+	}
+	if v, ok := s["transitiontime"].(float64); ok {
+		ps.TransitionTime = int(v)
+	}
+	if v, ok := s["videosequence"].(bool); ok {
+		ps.VideoSequence = v
+	}
+	if v, ok := s["updateonpause"].(bool); ok {
+		ps.UpdateOnPause = v
+	}
+	return ps
+}
+
+// parseMonitorPlaylist converts WE's serialized playlist ({name, settings, items})
+// into a *MonitorPlaylist. items are either a bare file string or {file, daytimeend,
+// preset}.
+func parseMonitorPlaylist(raw interface{}) *MonitorPlaylist {
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	pl := &MonitorPlaylist{}
+	if name, ok := m["name"].(string); ok {
+		pl.Name = name
+	}
+	if s, ok := m["settings"].(map[string]interface{}); ok {
+		pl.Settings = parsePlaylistSettings(s)
+	} else {
+		pl.Settings = PlaylistSettings{Order: "random", Mode: "timer", Delay: 60}
+	}
+	items, _ := m["items"].([]interface{})
+	for _, it := range items {
+		switch v := it.(type) {
+		case string:
+			if v != "" {
+				pl.Items = append(pl.Items, PlaylistItem{File: v})
+			}
+		case map[string]interface{}:
+			pi := PlaylistItem{}
+			if f, ok := v["file"].(string); ok {
+				pi.File = f
+			}
+			if d, ok := v["daytimeend"].(float64); ok {
+				pi.DaytimeEnd = d
+			}
+			if p, ok := v["preset"].(string); ok {
+				pi.Preset = p
+			}
+			if pi.File != "" {
+				pl.Items = append(pl.Items, pi)
+			}
+		}
+	}
+	return pl
+}
+
+// onSelectPlaylist handles browseWallpaperObject.selectPlaylist(serialized, location):
+// install a rotating playlist on a monitor. A ≤1-item playlist is not a playlist
+// (mirrors the WE UI) and collapses to a single selection.
+func (s *WSServer) onSelectPlaylist(args []interface{}) {
+	if len(args) < 2 {
+		return
+	}
+	pl := parseMonitorPlaylist(args[0])
+	monitor := monitorLabelFromArg(args[1])
+	if pl == nil || monitor == "" {
+		return
+	}
+	if len(pl.Items) <= 1 {
+		s.stateMu.Lock()
+		s.playlists.stopTimer(monitor)
+		delete(s.state.MonitorPlaylists, monitor)
+		s.stateMu.Unlock()
+		if len(pl.Items) == 1 {
+			s.onSelectWallpaper([]interface{}{pl.Items[0].File, args[1]})
+		}
+		return
+	}
+	s.playlists.SetPlaylist(monitor, pl)
+	notifyUser(fmt.Sprintf("%s: playlist (%d wallpapers)", monitor, len(pl.Items)))
+	s.updateDiscordPresence()
+}
+
+// onRemoveWallpaper handles browseWallpaperObject.removeWallpaper({location, playlist}):
+// clear a monitor's wallpaper and/or playlist and stop rendering it.
+func (s *WSServer) onRemoveWallpaper(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	m, ok := args[0].(map[string]interface{})
+	if !ok {
+		return
+	}
+	monitor := monitorLabelFromArg(m["location"])
+	if monitor == "" {
+		return
+	}
+	s.stateMu.Lock()
+	s.playlists.stopTimer(monitor)
+	delete(s.state.MonitorPlaylists, monitor)
+	delete(s.state.Monitors, monitor)
+	s.persistLocked()
+	snap := s.state.snapshot()
+	s.stateMu.Unlock()
+	log.Printf("[WE] removeWallpaper %s", monitor)
+	go s.renderer.Apply(snap)
+}
+
+// onPlaylistsChanged persists WE's named-playlist library (the `playlists` array,
+// sent as a JSON string) so saved playlists survive restarts and round-trip back
+// into the UI.
+func (s *WSServer) onPlaylistsChanged(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	var raw json.RawMessage
+	switch v := args[0].(type) {
+	case string:
+		raw = json.RawMessage(v)
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return
+		}
+		raw = b
+	}
+	if !json.Valid(raw) {
+		log.Printf("[WE] playlistsChanged: invalid JSON, ignored")
+		return
+	}
+	s.stateMu.Lock()
+	s.state.SavedPlaylists = raw
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	s.stateMu.Unlock()
+	log.Printf("[WE] saved playlists library updated (%d bytes)", len(raw))
+}
+
+// assignLocked sets a monitor's wallpaper and/or playlist to copies of the given
+// values, re-targeting the wallpaper to that monitor's label/device path. Caller
+// holds stateMu.
+func (s *WSServer) assignLocked(label string, wp *MonitorWallpaper, pl *MonitorPlaylist) {
+	if wp != nil {
+		c := *wp
+		c.Monitor = label
+		c.DevicePath = s.devicePathFor(label)
+		s.state.Monitors[label] = &c
+	} else {
+		delete(s.state.Monitors, label)
+	}
+	if pl != nil {
+		cp := *pl
+		cp.Items = append([]PlaylistItem(nil), pl.Items...)
+		s.state.MonitorPlaylists[label] = &cp
+	} else {
+		delete(s.state.MonitorPlaylists, label)
+	}
+}
+
+// onTransferWallpaper handles browseWallpaperObject.transferWallpaperProperties
+// ({source, destination, swap}): move (or swap) a wallpaper/playlist between
+// monitors. Without swap it is a move — the source is cleared.
+func (s *WSServer) onTransferWallpaper(args []interface{}) {
+	if len(args) == 0 {
+		return
+	}
+	m, ok := args[0].(map[string]interface{})
+	if !ok {
+		return
+	}
+	src := monitorLabelFromArg(m["source"])
+	dst := monitorLabelFromArg(m["destination"])
+	if src == "" || dst == "" || src == dst {
+		return
+	}
+	swap, _ := m["swap"].(bool)
+
+	s.stateMu.Lock()
+	srcWp, srcPl := s.state.Monitors[src], s.state.MonitorPlaylists[src]
+	dstWp, dstPl := s.state.Monitors[dst], s.state.MonitorPlaylists[dst]
+	s.assignLocked(dst, srcWp, srcPl)
+	if swap {
+		s.assignLocked(src, dstWp, dstPl)
+	} else {
+		delete(s.state.Monitors, src)
+		delete(s.state.MonitorPlaylists, src)
+	}
+	s.persistLocked()
+	snap := s.state.snapshot()
+	s.stateMu.Unlock()
+
+	s.playlists.Rearm(dst)
+	if swap {
+		s.playlists.Rearm(src)
+	} else {
+		s.playlists.stopTimer(src)
+	}
+	log.Printf("[WE] transfer %s → %s (swap=%v)", src, dst, swap)
+	go s.renderer.Apply(snap)
 }
 
 // sendHostedUIData pushes the wallpaper library and the translation table to a
