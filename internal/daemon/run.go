@@ -32,6 +32,8 @@ func Run() {
 		return
 	}
 
+	log.Printf("[wepapered] starting (version %s)", buildVersion)
+
 	// Resolve (and repair) the WE path: auto-detect if the configured one is
 	// empty or no longer points at a real install (e.g. a stale Flatpak path
 	// after switching to a native Steam, or a fresh install).

@@ -32,6 +32,18 @@ jobs:
         with:
           go-version: '1.22'
 
+      # Build version: the tag for releases, else r<commit-count>.<short-sha> for
+      # the rolling build. Baked into the binaries and shown in the release.
+      - name: Compute version
+        run: |
+          if [ "${GITHUB_REF#refs/tags/}" != "$GITHUB_REF" ]; then
+            VER="$GITHUB_REF_NAME"
+          else
+            VER="r$(git rev-list --count HEAD).$(git rev-parse --short HEAD)"
+          fi
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          echo "version: $VER"
+
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -60,7 +72,7 @@ jobs:
       - name: Build all binaries
         env:
           CGO_LDFLAGS: -Wl,--allow-shlib-undefined
-        run: make
+        run: make VERSION="$VER"
 
       - name: Assemble bundle
         run: |
@@ -76,6 +88,8 @@ jobs:
           # wepapered-bin Arch package, which installs them from here).
           cp install.sh dist/wepapered/
           cp LICENSE dist/wepapered/
+          # Record the build version inside the bundle (matches the baked-in one).
+          printf '%s\n' "$VER" > dist/wepapered/VERSION
           mkdir -p dist/wepapered/packaging
           cp packaging/arch/wepapered.desktop \
              packaging/arch/wepapered-settings.desktop \
@@ -180,7 +194,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: Latest build
+          name: Latest build (${{ env.VER }})
           prerelease: true
           body_path: packaging/RELEASE.md
           files: |

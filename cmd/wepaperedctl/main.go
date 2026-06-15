@@ -27,6 +27,7 @@ commands:
   gui         open the Wallpaper Engine browse window
   settings    open the settings window
   reload      tell a running daemon to reload config + restart renderers
+  version     print the build version
   help        show this help
 
 Extra args are forwarded to the component
@@ -42,6 +43,9 @@ func main() {
 	switch os.Args[1] {
 	case "-h", "--help", "help":
 		usage()
+		return
+	case "version", "--version", "-v":
+		fmt.Println("wepapered " + core.Version)
 		return
 	case "reload":
 		if err := core.ReloadDaemon(); err != nil {

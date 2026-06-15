@@ -23,6 +23,8 @@ var (
 	acquireControlSocket = core.AcquireControlSocket
 	listenRandomPort     = core.ListenRandomPort
 	controlSocketPath    = core.ControlSocketPath
+
+	buildVersion = core.Version
 )
 
 const settingsBinary = core.SettingsBinary

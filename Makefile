@@ -17,21 +17,26 @@
 GO  ?= go
 BIN ?= bin
 
+# Build version baked into the binaries (wepaperedctl --version, daemon log).
+# Override per build: `make VERSION=r123.abc1234`. Defaults to "dev".
+VERSION   ?= dev
+GOLDFLAGS ?= -X wepapered/internal/core.Version=$(VERSION)
+
 .PHONY: all daemon gui settings ctl vet clean
 
 all: daemon gui settings ctl
 
 daemon: | $(BIN)
-	$(GO) build -o $(BIN)/wepapered-daemon ./cmd/wepapered-daemon
+	$(GO) build -ldflags "$(GOLDFLAGS)" -o $(BIN)/wepapered-daemon ./cmd/wepapered-daemon
 
 gui: | $(BIN)
-	$(GO) build -o $(BIN)/wepapered-gui ./cmd/wepapered-gui
+	$(GO) build -ldflags "$(GOLDFLAGS)" -o $(BIN)/wepapered-gui ./cmd/wepapered-gui
 
 settings: | $(BIN)
-	$(GO) build -o $(BIN)/wepapered-settings ./cmd/wepapered-settings
+	$(GO) build -ldflags "$(GOLDFLAGS)" -o $(BIN)/wepapered-settings ./cmd/wepapered-settings
 
 ctl: | $(BIN)
-	$(GO) build -o $(BIN)/wepaperedctl ./cmd/wepaperedctl
+	$(GO) build -ldflags "$(GOLDFLAGS)" -o $(BIN)/wepaperedctl ./cmd/wepaperedctl
 
 $(BIN):
 	mkdir -p $(BIN)

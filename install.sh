@@ -309,8 +309,11 @@ do_uninstall() {
 path_hint() {
 	case ":${PATH}:" in
 		*":${BINDIR}:"*) ;;
-		*) warn "${BINDIR} is not on your PATH — add it:"
-		   printf '       export PATH="%s:$PATH"\n' "$BINDIR" >&2 ;;
+		*)
+			warn "${BINDIR} is not on your PATH — add it:"
+			# $PATH is intentionally literal here (it's for the user to paste).
+			# shellcheck disable=SC2016
+			printf '       export PATH="%s:$PATH"\n' "$BINDIR" >&2 ;;
 	esac
 }
 
