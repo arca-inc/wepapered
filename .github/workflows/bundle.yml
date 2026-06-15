@@ -252,7 +252,11 @@ jobs:
           # instead of downloading (the matching dest name + --skipinteg).
           cp "${GITHUB_WORKSPACE}/artifact/wepapered-linux-amd64.tar.gz" "wepapered-${ver}.tar.gz"
           chown -R builder .
-          sudo -u builder makepkg -f --noconfirm --nocheck --skipinteg
+          # --nodeps: we only repackage the prebuilt bundle, so the runtime
+          # depends() (gtk3, hyprland, webkit2gtk, nss, …) aren't needed to build
+          # the package and aren't installed in this minimal CI container; without
+          # it makepkg aborts with "Could not resolve all dependencies".
+          sudo -u builder makepkg -f --noconfirm --nocheck --skipinteg --nodeps
           ls -1 ./*.pkg.tar.zst
 
       - name: Attach package to release
