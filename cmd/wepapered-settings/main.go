@@ -145,6 +145,22 @@ func runConfigUI(cfg *core.Config) {
 	pathBox.PackStart(entry, true, true, 0)
 	pathBox.PackStart(detectBtn, false, false, 0)
 
+	// ── FPS (Target framerate) ────────────────────────────────────────────────
+	fpsBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
+	fpsLabel, _ := gtk.LabelNew("Target framerate (FPS):")
+	fpsLabel.SetXAlign(0)
+	fpsLabel.SetWidthChars(labelChars)
+
+	fpsAdj, _ := gtk.AdjustmentNew(float64(cfg.FPS), 1, 1000, 1, 10, 0)
+	if cfg.FPS == 0 {
+		fpsAdj.SetValue(30)
+	}
+	fpsSpin, _ := gtk.SpinButtonNew(fpsAdj, 1, 0)
+	fpsSpin.SetHExpand(true)
+
+	fpsBox.PackStart(fpsLabel, false, false, 0)
+	fpsBox.PackStart(fpsSpin, true, true, 0)
+
 	// ── Steam Web API key ─────────────────────────────────────────────────────
 	apiBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
 	apiLabel, _ := gtk.LabelNew("Steam Web API key:")
@@ -371,6 +387,7 @@ func runConfigUI(cfg *core.Config) {
 		cfg.AudioDevice = monCombo.GetActiveID()
 		cfg.MediaPlayer = playerCombo.GetActiveID()
 		cfg.NowPlayingText = npCheck.GetActive()
+		cfg.FPS = int(fpsSpin.GetValueAsInt())
 		cfg.CustomDirs = dirs
 
 		if err := core.SaveConfig(cfg); err != nil {
@@ -390,6 +407,7 @@ func runConfigUI(cfg *core.Config) {
 	box.PackStart(pathBox, false, false, 0)
 	box.PackStart(apiBox, false, false, 0)
 	box.PackStart(themeBox, false, false, 0)
+	box.PackStart(fpsBox, false, false, 0)
 	box.PackStart(audioBox, false, false, 0)
 	box.PackStart(playerBox, false, false, 0)
 	box.PackStart(npCheck, false, false, 0)
