@@ -70,13 +70,15 @@ for you by the install script.
 
 ## Supported environment
 
-| | Status |
+| Environment | Status |
 |---|---|
-| **Hyprland** on **Wayland** (x86_64) | ✅ Supported |
-| **GNOME** on **Wayland** | ❌ Implemented in `feature/gnome-support` branch, but unsupported natively due to GNOME forbidding Layer Shells. |
-| Other window managers / desktops | 🚧 Planned |
+| **Hyprland** on **Wayland** | ✅ Confirmed working |
+| **Almost any WM & DE** on **Wayland** | 🚧 Theoretically supported (uses native Wayland APIs), but pending confirmation |
+| **GNOME** on **Wayland** | ❌ Unsupported natively due to GNOME forbidding Layer Shells. (Monitor detection implemented in `feature/gnome-support` branch) |
 
-> **Note on GNOME Compatibility:** Monitor detection for GNOME has been implemented and is available in the `feature/gnome-support` branch. However, GNOME's compositor (Mutter) actively forbids and does not implement the Wayland Layer Shell protocol (`wlr-layer-shell`), which WePapered relies on to draw the wallpaper behind your desktop icons. Without a third-party extension to forcefully polyfill layer shell support, WePapered cannot function as a true wallpaper engine on GNOME Wayland.
+> **Note on Wayland Compatibility:** WePapered has been refactored to use native Wayland protocols for monitor detection. This means it should theoretically support almost any Wayland compositor that implements the `wlr-layer-shell` protocol (e.g. Sway, KDE Plasma). Currently, only Hyprland is fully confirmed working.
+>
+> **Note on GNOME Compatibility:** GNOME's compositor (Mutter) actively forbids and does not implement the Wayland Layer Shell protocol (`wlr-layer-shell`), which WePapered relies on to draw the wallpaper behind your desktop icons. Without a third-party extension to forcefully polyfill layer shell support, WePapered cannot function as a true wallpaper engine on GNOME Wayland.
 
 
 ## How to use
