@@ -1,6 +1,7 @@
-# makepkg build output
-/pkg/
-/src/
-/wepapered/
+# makepkg build output (in this dir and any package subdir, e.g. wepapered-bin/)
+pkg/
+src/
+wepapered/
+wepapered-*.tar.gz
 *.pkg.tar.*
 *.log

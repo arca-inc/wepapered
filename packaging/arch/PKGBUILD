@@ -3,7 +3,7 @@
 
 pkgname=wepapered-git
 _pkgname=wepapered
-pkgver=r92.4fa8bd3
+pkgver=0.0.1.r93.afced07
 pkgrel=1
 pkgdesc='Wallpaper Engine wallpapers rendered natively on Hyprland and Wayland'
 arch=('x86_64')
@@ -15,7 +15,7 @@ makedepends=('go' 'cmake' 'git' 'gcc' 'patchelf')
 optdepends=('hyprpaper: default loading placeholder backend'
             'swww: alternative loading placeholder backend')
 provides=('wepapered')
-conflicts=('wepapered')
+conflicts=('wepapered' 'wepapered-bin')
 # !buildflags: the bundled CEF/LWE build compiles with -Werror and its own flag
 # set; makepkg's hardening CFLAGS (e.g. -D_FORTIFY_SOURCE) collide and abort it.
 options=('!strip' '!debug' '!lto' '!buildflags')

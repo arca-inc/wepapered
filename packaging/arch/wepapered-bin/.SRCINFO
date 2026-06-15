@@ -1,0 +1,26 @@
+pkgbase = wepapered-bin
+	pkgdesc = Wallpaper Engine wallpapers rendered natively on Hyprland and Wayland (prebuilt)
+	pkgver = 0
+	pkgrel = 1
+	url = https://github.com/arca-inc/wepapered
+	install = wepapered.install
+	arch = x86_64
+	license = MIT
+	depends = gtk3
+	depends = gtk-layer-shell
+	depends = webkit2gtk-4.1
+	depends = hyprland
+	depends = nss
+	optdepends = hyprpaper: loading placeholder backend
+	optdepends = swww: alternative loading placeholder backend
+	provides = wepapered
+	conflicts = wepapered
+	conflicts = wepapered-git
+	options = !strip
+	options = !debug
+	options = !lto
+	options = !buildflags
+	source = wepapered-0.tar.gz::https://github.com/arca-inc/wepapered/releases/download/v0/wepapered-linux-amd64.tar.gz
+	sha256sums = SKIP
+
+pkgname = wepapered-bin
