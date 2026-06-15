@@ -13,12 +13,13 @@ import (
 )
 
 type TrayManager struct {
-	cfg  *Config
-	port int // the daemon's browse-UI port, for the xdg-open fallback URL
+	cfg    *Config
+	port   int    // the daemon's browse-UI port, for the xdg-open fallback URL
+	onQuit func() // graceful teardown (stop renderers/LWE etc.), run before exit
 }
 
-func newTrayManager(cfg *Config, port int) *TrayManager {
-	return &TrayManager{cfg: cfg, port: port}
+func newTrayManager(cfg *Config, port int, onQuit func()) *TrayManager {
+	return &TrayManager{cfg: cfg, port: port, onQuit: onQuit}
 }
 
 func (t *TrayManager) Run() {
@@ -94,7 +95,12 @@ func (t *TrayManager) launch(bin string, args ...string) {
 }
 
 func (t *TrayManager) onExit() {
-	// Signal Run() to stop everything.
-	log.Println("[wepapered] Quit requested from systray")
+	log.Println("[wepapered] Quit requested — shutting down")
+	// Tear down renderers/LWE/watcher before exiting (os.Exit skips deferred and
+	// post-Run() cleanup, so it must happen here — this is the single quit path
+	// for the tray, SIGTERM, and `wepaperedctl stop`).
+	if t.onQuit != nil {
+		t.onQuit()
+	}
 	os.Exit(0)
 }

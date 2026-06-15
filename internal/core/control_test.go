@@ -24,7 +24,7 @@ func fakeDaemon(ln net.Listener, port int) {
 			switch strings.TrimSpace(line) {
 			case "PORT":
 				fmt.Fprintf(c, "%d\n", port)
-			case "RELOAD":
+			case "RELOAD", "STOP":
 				fmt.Fprintln(c, "OK")
 			default:
 				fmt.Fprintln(c, "ERR unknown command")
@@ -57,6 +57,9 @@ func TestControlRendezvous(t *testing.T) {
 	}
 	if err := ReloadDaemon(); err != nil {
 		t.Fatalf("ReloadDaemon: %v", err)
+	}
+	if err := StopDaemon(); err != nil {
+		t.Fatalf("StopDaemon: %v", err)
 	}
 
 	// Single-instance gate: a second acquire must be refused while the first is live.

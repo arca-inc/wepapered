@@ -181,35 +181,21 @@ func sendCtrlStop(sockPath string) {
 
 // ── Environment helpers ───────────────────────────────────────────────────────
 
+// waylandEnvOverrides builds a subprocess environment for the session's Wayland
+// compositor: the shared core base env, plus the active compositor's vars (e.g.
+// Hyprland's instance signature, only when our own env lacks them) and the given
+// extras on top.
 func waylandEnvOverrides(extra map[string]string) []string {
-	overrides := map[string]string{"XDG_SESSION_TYPE": "wayland"}
-	if os.Getenv("WAYLAND_DISPLAY") == "" {
-		overrides["WAYLAND_DISPLAY"] = "wayland-1"
-	}
-	if os.Getenv("XDG_RUNTIME_DIR") == "" {
-		overrides["XDG_RUNTIME_DIR"] = fmt.Sprintf("/run/user/%d", sessionUID())
-	}
-	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") == "" {
-		if sig := hyprlandInstanceSig(); sig != "" {
-			overrides["HYPRLAND_INSTANCE_SIGNATURE"] = sig
+	overrides := map[string]string{}
+	for k, v := range sys.EnvOverrides() {
+		if os.Getenv(k) == "" {
+			overrides[k] = v
 		}
 	}
 	for k, v := range extra {
 		overrides[k] = v
 	}
-	result := make([]string, 0, len(os.Environ())+len(overrides))
-	for _, kv := range os.Environ() {
-		if idx := strings.IndexByte(kv, '='); idx > 0 {
-			if _, skip := overrides[kv[:idx]]; skip {
-				continue
-			}
-		}
-		result = append(result, kv)
-	}
-	for k, v := range overrides {
-		result = append(result, k+"="+v)
-	}
-	return result
+	return waylandSessionEnv(overrides)
 }
 
 func lweSubprocEnv() []string {
@@ -300,41 +286,6 @@ func nvidiaEGLVendorJSON() string {
 	return ""
 }
 
-// ── hyprctl helpers ───────────────────────────────────────────────────────────
-
-func hyprctlOutput(args ...string) ([]byte, error) {
-	baseEnv := waylandEnvOverrides(nil)
-
-	seen := map[string]bool{}
-	var sigs []string
-	if sig := os.Getenv("HYPRLAND_INSTANCE_SIGNATURE"); sig != "" {
-		sigs = append(sigs, sig)
-		seen[sig] = true
-	}
-	if entries, err := os.ReadDir(hyprDir()); err == nil {
-		for _, e := range entries {
-			if e.IsDir() && !seen[e.Name()] {
-				sigs = append(sigs, e.Name())
-				seen[e.Name()] = true
-			}
-		}
-	}
-	if len(sigs) == 0 {
-		return nil, fmt.Errorf("no Hyprland instances found")
-	}
-	var lastErr error
-	for _, sig := range sigs {
-		cmd := exec.Command("hyprctl", append([]string{"-i", sig}, args...)...)
-		cmd.Env = append(append([]string(nil), baseEnv...), "HYPRLAND_INSTANCE_SIGNATURE="+sig)
-		out, err := cmd.Output()
-		if err == nil {
-			return out, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
 // ── Loading overlay ───────────────────────────────────────────────────────────
 
 const (
@@ -418,13 +369,13 @@ func (r *Renderer) applyLocked(state *DaemonState) {
 		return
 	}
 
-	outputs, err := hyprlandOutputs()
+	outputs, err := sys.Outputs()
 	if err != nil {
-		log.Printf("[renderer] hyprctl failed: %v", err)
+		log.Printf("[renderer] %s: failed to enumerate outputs: %v", sys.Name(), err)
 		return
 	}
 	if len(outputs) == 0 {
-		log.Printf("[renderer] no outputs from hyprctl")
+		log.Printf("[renderer] %s: no outputs", sys.Name())
 		return
 	}
 
@@ -924,57 +875,6 @@ func bgDirFromLinuxPath(p string) string {
 	return ""
 }
 
-type hyprOutput struct {
-	Name   string `json:"name"`
-	X      int    `json:"x"`
-	Y      int    `json:"y"`
-	Width  int    `json:"width"`
-	Height int    `json:"height"`
-}
-
-func hyprlandOutputs() ([]hyprOutput, error) {
-	var out []byte
-	var err error
-	if os.Getuid() == 0 {
-		sig := hyprlandInstanceSig()
-		waylandEnv := []string{
-			"HOME=" + sessionHome(),
-			"WAYLAND_DISPLAY=wayland-1",
-			fmt.Sprintf("XDG_RUNTIME_DIR=/run/user/%d", sessionUID()),
-			"XDG_SESSION_TYPE=wayland",
-			"HYPRLAND_INSTANCE_SIGNATURE=" + sig,
-		}
-		cmd := exec.Command("sudo", append([]string{"-u", sessionUsername(), "env"}, append(waylandEnv, "hyprctl", "monitors", "-j")...)...)
-		out, err = cmd.Output()
-	} else {
-		out, err = hyprctlOutput("monitors", "-j")
-	}
-	if err != nil {
-		return nil, err
-	}
-	var raw []struct {
-		Name   string `json:"name"`
-		X      int    `json:"x"`
-		Y      int    `json:"y"`
-		Width  int    `json:"width"`
-		Height int    `json:"height"`
-	}
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, err
-	}
-	result := make([]hyprOutput, 0, len(raw))
-	for _, m := range raw {
-		result = append(result, hyprOutput{Name: m.Name, X: m.X, Y: m.Y, Width: m.Width, Height: m.Height})
-	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].X != result[j].X {
-			return result[i].X < result[j].X
-		}
-		return result[i].Y < result[j].Y
-	})
-	return result, nil
-}
-
 func errorWallpaperDir(label, title, typ string) string {
 	dir := filepath.Join(os.TempDir(), "wepapered-error", label)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1009,64 +909,6 @@ func isLWESupportedType(t string) bool {
 	return false
 }
 
-func hyprlandInstanceSig() string {
-	entries, _ := os.ReadDir(hyprDir())
-	for _, e := range entries {
-		if e.IsDir() {
-			return e.Name()
-		}
-	}
-	return ""
-}
-
-// ── Session user helpers ───────────────────────────────────────────────────────
-
-// sessionUID returns the UID of the Wayland session owner.
-// When wepapered runs as root (e.g. via sudo), SUDO_UID gives the real user.
-func sessionUID() int {
-	if os.Getuid() == 0 {
-		if s := os.Getenv("SUDO_UID"); s != "" {
-			var uid int
-			fmt.Sscan(s, &uid)
-			if uid > 0 {
-				return uid
-			}
-		}
-	}
-	return os.Getuid()
-}
-
-// sessionUsername returns the login name of the Wayland session owner.
-func sessionUsername() string {
-	if os.Getuid() == 0 {
-		if u := os.Getenv("SUDO_USER"); u != "" {
-			return u
-		}
-	}
-	if u := os.Getenv("USER"); u != "" {
-		return u
-	}
-	return "root"
-}
-
-// sessionHome returns the home directory of the Wayland session owner.
-func sessionHome() string {
-	if os.Getuid() == 0 {
-		if u := os.Getenv("SUDO_USER"); u != "" {
-			return "/home/" + u
-		}
-	}
-	if h := os.Getenv("HOME"); h != "" {
-		return h
-	}
-	return "/root"
-}
-
-// hyprDir returns the path to the Hyprland socket directory for the session.
-func hyprDir() string {
-	xdg := os.Getenv("XDG_RUNTIME_DIR")
-	if xdg == "" {
-		xdg = fmt.Sprintf("/run/user/%d", sessionUID())
-	}
-	return filepath.Join(xdg, "hypr")
-}
+// Compositor-specific helpers (hyprctl, instance signature, socket dir) and the
+// generic Wayland-session helpers (sessionUID/Username/Home) now live in
+// internal/compositor and internal/core respectively.

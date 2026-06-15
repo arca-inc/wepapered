@@ -141,6 +141,20 @@ func DaemonPort() (int, error) {
 	return port, nil
 }
 
+// StopDaemon asks a running daemon to shut down gracefully (stopping the renderers
+// and their linux-wallpaperengine subprocesses). Returns an error if no daemon is
+// reachable or it refused.
+func StopDaemon() error {
+	reply, err := controlRequest("STOP")
+	if err != nil {
+		return err
+	}
+	if reply != "OK" {
+		return fmt.Errorf("daemon stop failed: %s", reply)
+	}
+	return nil
+}
+
 // ReloadDaemon asks a running daemon to re-read its config and relaunch the renderers
 // so changes take effect immediately. Returns an error if no daemon is reachable
 // (e.g. it isn't running) or the reload failed — callers may treat that as benign.

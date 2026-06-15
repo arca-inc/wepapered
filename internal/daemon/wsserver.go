@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"fyne.io/systray"
 	"github.com/gorilla/websocket"
 )
 
@@ -195,6 +196,12 @@ func (s *WSServer) handleControlConn(c net.Conn) {
 		} else {
 			fmt.Fprintln(c, "OK")
 		}
+	case "STOP":
+		fmt.Fprintln(c, "OK")
+		// Graceful shutdown via the same path as a tray Quit / SIGTERM: tears down
+		// the renderers (kills LWE) then exits. Async so this reply flushes first;
+		// the teardown waits on the subprocesses, leaving ample time for delivery.
+		go systray.Quit()
 	default:
 		fmt.Fprintln(c, "ERR unknown command")
 	}
@@ -276,7 +283,7 @@ func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {
 	// Push the real displays so the hosted UI's "Choose display" picker is
 	// populated before any wallpaper is assigned (otherwise it has nothing to
 	// select, and a wallpaper can't be applied without a selected monitor).
-	if outs, err := hyprlandOutputs(); err == nil && len(outs) > 0 {
+	if outs, err := sys.Outputs(); err == nil && len(outs) > 0 {
 		var disp []map[string]interface{}
 		for i, o := range outs {
 			w, h := o.Width, o.Height
@@ -364,8 +371,8 @@ func (s *WSServer) handleCallbackMessage(conn *websocket.Conn, msg WEMessage) {
 	if msg.Object == "browseWallpaperObject" && (msg.Method == "getMonitors" || msg.Method == "getDisplays") {
 		var monitorsArray []map[string]interface{}
 
-		// Use real Hyprland output geometry when available.
-		outputs, err := hyprlandOutputs()
+		// Use the compositor's real output geometry when available.
+		outputs, err := sys.Outputs()
 		if err == nil && len(outputs) > 0 {
 			for idx, o := range outputs {
 				label := fmt.Sprintf("Monitor%d", idx)
@@ -495,9 +502,10 @@ func (s *WSServer) onChangeLayout(args []interface{}) {
 }
 
 // allMonitorLabels returns the Monitor0..N labels for the current real outputs,
-// falling back to whatever labels are already in state if hyprctl is unavailable.
+// falling back to whatever labels are already in state if the compositor is
+// unavailable.
 func (s *WSServer) allMonitorLabels() []string {
-	if outs, err := hyprlandOutputs(); err == nil && len(outs) > 0 {
+	if outs, err := sys.Outputs(); err == nil && len(outs) > 0 {
 		labels := make([]string, len(outs))
 		for i := range outs {
 			labels[i] = fmt.Sprintf("Monitor%d", i)

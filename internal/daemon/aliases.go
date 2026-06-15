@@ -25,6 +25,10 @@ var (
 	controlSocketPath    = core.ControlSocketPath
 
 	buildVersion = core.Version
+
+	sessionUID        = core.SessionUID
+	sessionUsername   = core.SessionUsername
+	waylandSessionEnv = core.WaylandSessionEnv
 )
 
 const settingsBinary = core.SettingsBinary

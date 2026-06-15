@@ -6,9 +6,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 
 	"fyne.io/systray"
+
+	"wepapered/internal/compositor"
 )
 
 // Run is the wepapered daemon entry point. It wires up WSServer → Renderer →
@@ -32,7 +35,17 @@ func Run() {
 		return
 	}
 
-	log.Printf("[wepapered] starting (version %s)", buildVersion)
+	// Detect the windowing system. With no supported compositor (e.g. started
+	// outside a Hyprland/Wayland session) there's nothing to render on — exit
+	// cleanly (status 0) so a systemd Restart=on-failure doesn't loop.
+	comp, err := compositor.Detect()
+	if err != nil {
+		log.Printf("[wepapered] %v — not starting.", err)
+		return
+	}
+	sys = comp
+
+	log.Printf("[wepapered] starting (version %s, compositor %s)", buildVersion, sys.Name())
 
 	// Resolve (and repair) the WE path: auto-detect if the configured one is
 	// empty or no longer points at a real install (e.g. a stale Flatpak path
@@ -118,7 +131,24 @@ func Run() {
 		log.Printf("watcher start failed (continuing without WE config re-assert): %v", err)
 	}
 
-	tray := newTrayManager(cfg, port)
+	// Single graceful-shutdown path, shared by the tray Quit, SIGTERM, and the
+	// control-socket STOP (wepaperedctl stop). sync.Once so it's safe to call from
+	// more than one of those. renderer.Stop() kills the LWE subprocesses; the extra
+	// killStrayRenderers() reaps any that escaped.
+	var shutdownOnce sync.Once
+	cleanup := func() {
+		shutdownOnce.Do(func() {
+			log.Println("[wepapered] stopping")
+			ws.playlists.Stop()
+			w.Stop()
+			ws.renderer.Stop()
+			killStrayRenderers()
+			ws.discord.Close()
+			ctrlLn.Close() // unlinks the control socket file
+		})
+	}
+
+	tray := newTrayManager(cfg, port, cleanup)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -126,16 +156,11 @@ func Run() {
 	go func() {
 		<-sig
 		log.Println("[wepapered] signal received, stopping")
-		systray.Quit()
+		systray.Quit() // → tray onExit → cleanup → exit
 	}()
 
-	// tray.Run() blocks the main thread.
+	// tray.Run() blocks the main thread; onExit runs cleanup. The fallback call
+	// covers the rare case Run() returns without onExit firing.
 	tray.Run()
-
-	log.Println("[wepapered] stopping")
-	ws.playlists.Stop()
-	w.Stop()
-	ws.renderer.Stop()
-	ws.discord.Close()
-	ctrlLn.Close() // unlinks the control socket file
+	cleanup()
 }
