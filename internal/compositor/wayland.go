@@ -88,7 +88,8 @@ static void fetch_wayland_outputs() {
     while (curr) {
         struct my_output *next = curr->next;
         if (curr->name) free(curr->name);
-        if (curr->wl_output) wl_output_destroy(curr->wl_output);
+        // wl_output_destroy(curr->wl_output) is NOT needed and will segfault
+        // because wl_display_disconnect already freed the underlying proxy objects.
         free(curr);
         curr = next;
     }
