@@ -22,9 +22,13 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       # Use the PAT so the private lwe submodule (for headers) clones too.
+      # fetch-depth: 0 → full history so `git rev-list --count HEAD` yields the
+      # real commit count (the version scheme), matching the AUR package; a
+      # shallow checkout would report 1.
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
           token: ${{ secrets.LWE_ACCESS_TOKEN || github.token }}
 
       - name: Set up Go
