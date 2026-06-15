@@ -71,7 +71,10 @@ func (s *WSServer) handleQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 func (s *WSServer) doQueryWorkshop(conn *websocket.Conn, msg WEMessage) {
 	if s.cfg.Load().SteamAPIKey == "" {
 		log.Println("[WE] queryWorkshop: missing Steam API key")
+		// Clear the grid, then tell the UI to instruct the user to add a key
+		// (Workshop/Explore can't be queried without one).
 		s.sendCallback(conn, msg.Callback, map[string]interface{}{"wallpapers": []UIWallpaper{}, "total": 0})
+		s.Broadcast(map[string]interface{}{"type": "apikeymissing"})
 		return
 	}
 

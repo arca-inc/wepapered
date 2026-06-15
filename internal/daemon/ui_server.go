@@ -53,6 +53,11 @@ func (s *WSServer) serveUI(w http.ResponseWriter, r *http.Request) {
 	locale["ui_wepapered_feature_unavailable_title"] = "WePapered"
 	locale["ui_wepapered_feature_unavailable_body"] = "This feature isn't available on WePapered yet."
 
+	// Strings for the "Steam API key required" dialog (see wepShowApiKeyMissing).
+	locale["ui_wepapered_apikey_title"] = "Steam Web API key required"
+	locale["ui_wepapered_apikey_body"] = "Browsing the Workshop needs a Steam Web API key. Open Settings and paste your key — the \"?\" button next to the field opens Steam's page to create one."
+	locale["ui_wepapered_apikey_open_settings"] = "Open Settings"
+
 	localeJSON, _ := json.Marshal(locale)
 
 	shim := `<script>
@@ -517,6 +522,43 @@ function wepShowFeatureUnavailable() {
 	showWepToast("This feature isn't available on WePapered yet.");
 }
 
+// wepShowApiKeyMissing pops WE's native dialog telling the user the Workshop needs
+// a Steam Web API key, with an "Open Settings" button that launches the settings
+// window (via showSettingsDialog). Guarded so a burst of failed queries doesn't
+// stack modals. Falls back to a toast if the modals service can't be reached.
+function wepShowApiKeyMissing() {
+	if (window.__wepApiKeyModalOpen) return;
+	// Leave the empty Workshop — which can't load without a key — for the Installed
+	// tab right away, as the popup shows (not on dismiss). This runs from the WS
+	// message handler, outside Angular, so wrap it in a digest.
+	try {
+		var c = window.browseWallpapersCtrl;
+		if (c && typeof c.setListSourceRecorded === 'function' && c.source !== 'installed') {
+			if (c.$$phase || (c.$root && c.$root.$$phase)) c.setListSourceRecorded('installed');
+			else c.$apply(function() { c.setListSourceRecorded('installed'); });
+		}
+	} catch (e) {}
+	try {
+		var modals = angular.element(document.body).injector().get('modals');
+		window.__wepApiKeyModalOpen = true;
+		function clr() { window.__wepApiKeyModalOpen = false; }
+		modals.open('genericConfirm', { data: {
+			title: 'ui_wepapered_apikey_title',
+			message: 'ui_wepapered_apikey_body',
+			okVisible: true,
+			leftVisible: true,
+			leftClass: 'btn-info',
+			leftText: 'ui_wepapered_apikey_open_settings',
+			leftCallback: function() {
+				try { window.browseWallpaperObject.showSettingsDialog(); } catch (e) {}
+			}
+		}}).then(clr, clr);
+		return;
+	} catch (e) {}
+	window.__wepApiKeyModalOpen = false;
+	showWepToast("Set your Steam Web API key in Settings to browse the Workshop.");
+}
+
 window.__bridgeOnMessage = function(e) {
 	var msg = JSON.parse(e.data);
 	if (msg.type === 'state') {
@@ -529,6 +571,8 @@ window.__bridgeOnMessage = function(e) {
 		applyWorkshopProgress(msg);
 	} else if (msg.type === 'wserror') {
 		showWepToast(msg.message || 'Steam UGC unavailable.');
+	} else if (msg.type === 'apikeymissing') {
+		wepShowApiKeyMissing();
 	} else if (msg.type === 'library') {
 		if (window.browseWallpapersCtrl) {
 			if (window.browseWallpapersCtrl.setListSource) {
