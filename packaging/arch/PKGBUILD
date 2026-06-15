@@ -3,7 +3,7 @@
 
 pkgname=wepapered-git
 _pkgname=wepapered
-pkgver=r74.363d2b9
+pkgver=r82.c7c943f
 pkgrel=1
 pkgdesc='Wallpaper Engine wallpapers rendered natively on Hyprland and Wayland'
 arch=('x86_64')

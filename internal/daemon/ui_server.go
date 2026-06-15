@@ -48,7 +48,11 @@ func (s *WSServer) serveUI(w http.ResponseWriter, r *http.Request) {
 	
 	// Override the main title
 	locale["ui_caption_browse"] = "Wepapered - Made for gamers"
-	
+
+	// Strings for the "feature not available" dialog (see wepShowFeatureUnavailable).
+	locale["ui_wepapered_feature_unavailable_title"] = "WePapered"
+	locale["ui_wepapered_feature_unavailable_body"] = "This feature isn't available on WePapered yet."
+
 	localeJSON, _ := json.Marshal(locale)
 
 	shim := `<script>
@@ -313,6 +317,7 @@ function updateUIState() {
 	// ourselves: once for the wallpaper selected on open, and (via the patch below)
 	// whenever the user picks another wallpaper in the grid.
 	wepInstallPropPatch(val);
+	wepInstallFeaturePatch(val);
 	if (val.currentSelection && val.selectedMonitor) {
 		wepPushProps(val, val.currentSelection);
 	}
@@ -374,6 +379,17 @@ function wepInstallPropPatch(val) {
 		setTimeout(function() { try { wepPushProps(val, wp); } catch (e) {} }, 0);
 		return r;
 	};
+}
+
+// wepInstallFeaturePatch overrides controller-level entry points for features we
+// don't bridge yet that DON'T go through the host bridge (so the proxy can't catch
+// them). "Open from URL" opens a local WE modal directly via the modals service —
+// replace the method so it shows the "not available yet" dialog instead.
+function wepInstallFeaturePatch(val) {
+	if (!val || val.__wepFeaturePatched) return;
+	if (typeof val.openFromUrl !== 'function') return;
+	val.__wepFeaturePatched = true;
+	val.openFromUrl = function() { wepShowFeatureUnavailable(); };
 }
 
 var _browseWallpapersCtrl;
@@ -467,6 +483,25 @@ function showWepToast(text) {
 			setTimeout(function(){ if (t.parentNode) t.parentNode.removeChild(t); }, 300);
 		}, 5000);
 	} catch (e) {}
+}
+
+// wepShowFeatureUnavailable pops WE's own confirm dialog (the same modal style as
+// the monitors / every other WE dialog) telling the user a feature isn't bridged
+// yet. Used for native-app entry points WePapered doesn't implement (Wallpaper
+// Editor, open offline wallpaper / background image, open from URL). Uses WE's
+// 'modals' service via the Angular injector for native look; falls back to a
+// toast if the service can't be reached.
+function wepShowFeatureUnavailable() {
+	try {
+		var modals = angular.element(document.body).injector().get('modals');
+		modals.open('genericConfirm', { data: {
+			title: 'ui_wepapered_feature_unavailable_title',
+			message: 'ui_wepapered_feature_unavailable_body',
+			okVisible: true
+		}});
+		return;
+	} catch (e) {}
+	showWepToast("This feature isn't available on WePapered yet.");
 }
 
 window.__bridgeOnMessage = function(e) {
@@ -649,6 +684,19 @@ BRIDGE_OBJECTS.forEach(function(name) {
 					if (typeof prop === 'symbol') return undefined;
 					return function() {
 						var args = Array.prototype.slice.call(arguments);
+						// Native-app features WePapered doesn't bridge yet. These all
+						// route through browseWallpaperObject methods (editor-open:
+						// showEditorDialog/openInEditor/createInEditor; open offline
+						// wallpaper + open background image: openFromFile) — intercept
+						// and show a "not available yet" dialog instead of a dead
+						// bridge call. ("Open from URL" opens a local modal with no
+						// bridge call; handled in wepInstallFeaturePatch.)
+						if (name === 'browseWallpaperObject' &&
+							(prop === 'showEditorDialog' || prop === 'openInEditor' ||
+							 prop === 'createInEditor' || prop === 'openFromFile')) {
+							wepShowFeatureUnavailable();
+							return;
+						}
 						// WE's callDeferred(obj, method, …) registers its reply
 						// handler as window[method + "Callback"] and resolves a
 						// promise from it. Send that exact callback name so the
