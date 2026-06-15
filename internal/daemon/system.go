@@ -2,7 +2,7 @@ package daemon
 
 import "wepapered/internal/compositor"
 
-// sys is the active compositor backend (Hyprland today). The daemon reaches the
+// sys is the active compositor backend (Wayland native today). The daemon reaches the
 // windowing system — enumerating outputs, the subprocess env — only through this
 // interface, so supporting another desktop is a new internal/compositor
 // implementation rather than changes scattered across the daemon. Set once at
