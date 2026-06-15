@@ -50,7 +50,16 @@ func (f *lweLogFilter) Write(p []byte) (int, error) {
 
 func lweNoiseLine(line string) bool {
 	t := strings.TrimLeft(line, " \t")
-	return strings.HasPrefix(t, "Fontconfig warning:") || strings.HasPrefix(t, "Fontconfig error:")
+	if strings.HasPrefix(t, "Fontconfig warning:") || strings.HasPrefix(t, "Fontconfig error:") {
+		return true
+	}
+	// CEF launches its subprocesses as a standalone helper binary rather than
+	// forking the zygote, so a child never finds the ICU data file descriptor in
+	// its GlobalDescriptors store. Chromium logs this at ERROR level and then
+	// falls back to loading icudtl.dat from resources_dir_path (which we set), so
+	// the message is benign noise emitted once per web wallpaper subprocess.
+	return strings.Contains(t, "icu_util.cc") &&
+		strings.Contains(t, "Invalid file descriptor to ICU data received")
 }
 
 func init() {
