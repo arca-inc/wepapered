@@ -70,6 +70,14 @@ type DaemonState struct {
 	// SavedPlaylists is WE's named-playlist library (the `playlists` array) stored
 	// verbatim so it round-trips back into the UI. Updated via playlistsChanged.
 	SavedPlaylists json.RawMessage `json:"saved_playlists,omitempty"`
+	// SavedProfiles is WE's named monitor-profile library (the `profiles` array, the
+	// Save/Load profile feature) stored verbatim so saved profiles survive restarts
+	// and round-trip back into the UI. Updated via profilesChanged.
+	SavedProfiles json.RawMessage `json:"saved_profiles,omitempty"`
+	// MonitorProfile is WE's active monitor arrangement (wallpaperConfig.profile:
+	// clone groups / splits) stored verbatim and restored as wallpaperconfig.profile.
+	// Updated via updateProfile.
+	MonitorProfile json.RawMessage `json:"monitor_profile,omitempty"`
 }
 
 // snapshot returns an independent copy for rollback. The map entries are never
@@ -83,6 +91,8 @@ func (st *DaemonState) snapshot() *DaemonState {
 		Layout:           st.Layout,
 		BrowserSettings:  st.BrowserSettings,
 		SavedPlaylists:   st.SavedPlaylists,
+		SavedProfiles:    st.SavedProfiles,
+		MonitorProfile:   st.MonitorProfile,
 	}
 	for k, v := range st.Monitors {
 		cp.Monitors[k] = v

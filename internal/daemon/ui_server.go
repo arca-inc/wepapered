@@ -238,7 +238,7 @@ function updateUIState() {
 
 	val.applyMonitorConfigurationAndWallpaperConfig(
 		monitorsArray,
-		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: (state.layout || 0) }, playlists: (state.saved_playlists || []), browser: { advertiseworkshop: false, advertiseexplore: false, advertiseworkshoppopup: false, advertisesendtomobile: false, defaultfilterconfig: ffc } },
+		{ wallpaperconfig: { selectedwallpapers: selectedWallpapers, layout: (state.layout || 0), profile: (state.monitor_profile || {}) }, playlists: (state.saved_playlists || []), profiles: (state.saved_profiles || []), browser: { advertiseworkshop: false, advertiseexplore: false, advertiseworkshoppopup: false, advertisesendtomobile: false, defaultfilterconfig: ffc } },
 		{},
 		false
 	);

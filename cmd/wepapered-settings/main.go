@@ -252,7 +252,14 @@ func runConfigUI(cfg *core.Config) {
 			}
 		}
 		if !found {
-			playerCombo.Append(cfg.MediaPlayer, cfg.MediaPlayer)
+			// Same friendly label as the running-player entries: "<player>,%any"
+			// → "<player> (then any)". Falls back to the raw value for anything
+			// that isn't the standard prefer-then-any form.
+			label := cfg.MediaPlayer
+			if base, ok := strings.CutSuffix(cfg.MediaPlayer, ",%any"); ok {
+				label = base + " (then any)"
+			}
+			playerCombo.Append(cfg.MediaPlayer, label)
 		}
 	}
 	playerCombo.SetActiveID(cfg.MediaPlayer) // "" selects "Any (default)"

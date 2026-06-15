@@ -379,6 +379,8 @@ func (s *WSServer) handleBrowse(conn *websocket.Conn, msg WEMessage) {
 		s.onRemoveWallpaper(msg.Args)
 	case "playlistsChanged":
 		s.onPlaylistsChanged(msg.Args)
+	case "profilesChanged":
+		s.onProfilesChanged(msg.Args)
 	case "transferWallpaperProperties":
 		s.onTransferWallpaper(msg.Args)
 	case "applySingleProperty":
@@ -402,7 +404,7 @@ func (s *WSServer) handleBrowse(conn *websocket.Conn, msg WEMessage) {
 	case "showSettingsDialog":
 		s.openConfigWindow()
 	case "updateProfile":
-		log.Printf("[WE] updateProfile intercepted — callback will be wrapped")
+		s.onUpdateProfile(msg.Args)
 	default:
 		log.Printf("[WE] browse.%s", msg.Method)
 	}
@@ -895,9 +897,12 @@ func (s *WSServer) onRemoveWallpaper(args []interface{}) {
 // onPlaylistsChanged persists WE's named-playlist library (the `playlists` array,
 // sent as a JSON string) so saved playlists survive restarts and round-trip back
 // into the UI.
-func (s *WSServer) onPlaylistsChanged(args []interface{}) {
+// rawJSONArg extracts a JSON payload from a bridge arg that may arrive as a JSON
+// string (WE's angular.toJson) or as an already-decoded value. Returns false when
+// the arg is missing or the result isn't valid JSON.
+func rawJSONArg(args []interface{}) (json.RawMessage, bool) {
 	if len(args) == 0 {
-		return
+		return nil, false
 	}
 	var raw json.RawMessage
 	switch v := args[0].(type) {
@@ -906,11 +911,19 @@ func (s *WSServer) onPlaylistsChanged(args []interface{}) {
 	default:
 		b, err := json.Marshal(v)
 		if err != nil {
-			return
+			return nil, false
 		}
 		raw = b
 	}
 	if !json.Valid(raw) {
+		return nil, false
+	}
+	return raw, true
+}
+
+func (s *WSServer) onPlaylistsChanged(args []interface{}) {
+	raw, ok := rawJSONArg(args)
+	if !ok {
 		log.Printf("[WE] playlistsChanged: invalid JSON, ignored")
 		return
 	}
@@ -921,6 +934,44 @@ func (s *WSServer) onPlaylistsChanged(args []interface{}) {
 	}
 	s.stateMu.Unlock()
 	log.Printf("[WE] saved playlists library updated (%d bytes)", len(raw))
+}
+
+// onProfilesChanged persists WE's named monitor-profile library (the Save/Load
+// profile feature). WE serializes the whole `profiles` array on every change; we
+// store it verbatim and feed it back as the config's `profiles` field on load so
+// saved profiles survive restarts. Loading a profile re-applies its wallpapers
+// through the normal per-monitor selection path, so no extra apply is needed here.
+func (s *WSServer) onProfilesChanged(args []interface{}) {
+	raw, ok := rawJSONArg(args)
+	if !ok {
+		log.Printf("[WE] profilesChanged: invalid JSON, ignored")
+		return
+	}
+	s.stateMu.Lock()
+	s.state.SavedProfiles = raw
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	s.stateMu.Unlock()
+	log.Printf("[WE] saved profiles library updated (%d bytes)", len(raw))
+}
+
+// onUpdateProfile persists WE's active monitor arrangement (wallpaperConfig.profile:
+// clone groups / splits). Stored verbatim and restored as wallpaperconfig.profile on
+// load so the current monitor configuration survives restarts.
+func (s *WSServer) onUpdateProfile(args []interface{}) {
+	raw, ok := rawJSONArg(args)
+	if !ok {
+		log.Printf("[WE] updateProfile: invalid JSON, ignored")
+		return
+	}
+	s.stateMu.Lock()
+	s.state.MonitorProfile = raw
+	if err := saveState(s.state); err != nil {
+		log.Printf("[wepapered] state save error: %v", err)
+	}
+	s.stateMu.Unlock()
+	log.Printf("[WE] monitor profile updated (%d bytes)", len(raw))
 }
 
 // assignLocked sets a monitor's wallpaper and/or playlist to copies of the given
