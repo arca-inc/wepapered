@@ -113,9 +113,12 @@ FAMILY=unknown
 PKG=
 detect_distro() {
 	[ -r /etc/os-release ] || return 0
+	# Read ID/ID_LIKE in a subshell instead of sourcing os-release into our scope:
+	# os-release also defines VERSION= (e.g. "2.18" on Gentoo), which would clobber
+	# the release tag we resolved above and break the download.
 	# shellcheck disable=SC1091
-	. /etc/os-release
-	for id in ${ID:-} ${ID_LIKE:-}; do
+	ids=$(. /etc/os-release 2>/dev/null; printf '%s %s' "${ID:-}" "${ID_LIKE:-}")
+	for id in $ids; do
 		case "$id" in
 			arch|cachyos|manjaro|endeavouros|garuda|artix) FAMILY=arch; break ;;
 			debian|ubuntu|linuxmint|pop|raspbian) FAMILY=debian; break ;;
