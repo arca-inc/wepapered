@@ -71,6 +71,15 @@ jobs:
           # icon is embedded in the daemon, so this is for desktop-entry icons and
           # anything that wants the logo as a file.
           cp -a assets dist/wepapered/
+          # Self-sufficient archive: the universal installer + the launcher/service
+          # files (used by `./install.sh` from inside the archive and by the
+          # wepapered-bin Arch package, which installs them from here).
+          cp install.sh dist/wepapered/
+          cp LICENSE dist/wepapered/
+          mkdir -p dist/wepapered/packaging
+          cp packaging/arch/wepapered.desktop \
+             packaging/arch/wepapered-settings.desktop \
+             packaging/arch/wepapered.service dist/wepapered/packaging/
           # Colocate the LWE runtime next to the binaries (paths.go expects
           # linux-wallpaperengine to sit beside the executable in a packaged install).
           cp -a lwe/build/output/. dist/wepapered/
@@ -138,6 +147,8 @@ jobs:
           done
 
           tar -czf wepapered-linux-amd64.tar.gz -C dist wepapered
+          # Checksum for install.sh to verify the download against.
+          sha256sum wepapered-linux-amd64.tar.gz > wepapered-linux-amd64.tar.gz.sha256
           du -sh dist/wepapered
 
       - name: Verify no missing media libs
@@ -154,7 +165,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: wepapered-bundle-linux-amd64
-          path: wepapered-linux-amd64.tar.gz
+          path: |
+            wepapered-linux-amd64.tar.gz
+            wepapered-linux-amd64.tar.gz.sha256
 
       - name: Refresh rolling latest release
         if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
@@ -170,11 +183,57 @@ jobs:
           name: Latest build
           prerelease: true
           body_path: packaging/RELEASE.md
-          files: wepapered-linux-amd64.tar.gz
+          files: |
+            wepapered-linux-amd64.tar.gz
+            wepapered-linux-amd64.tar.gz.sha256
 
       - name: Publish versioned release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           body_path: packaging/RELEASE.md
-          files: wepapered-linux-amd64.tar.gz
+          files: |
+            wepapered-linux-amd64.tar.gz
+            wepapered-linux-amd64.tar.gz.sha256
+
+  # Build the Arch wepapered-bin package from the just-released bundle (no CEF
+  # rebuild) and attach the .pkg.tar.zst to the versioned release. Tags only —
+  # the rolling `latest` has no version for a pkgver.
+  package-arch:
+    needs: bundle
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare build environment
+        run: |
+          pacman -Syu --noconfirm --needed git
+          # makepkg refuses to run as root; build as an unprivileged user.
+          useradd -m builder
+
+      - name: Download bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: wepapered-bundle-linux-amd64
+          path: artifact
+
+      - name: Build wepapered-bin
+        run: |
+          set -euo pipefail
+          ver="${GITHUB_REF_NAME#v}"
+          cd packaging/arch/wepapered-bin
+          sed -i "s/^pkgver=.*/pkgver=${ver}/" PKGBUILD
+          # Seed the source with the freshly built artifact so makepkg uses it
+          # instead of downloading (the matching dest name + --skipinteg).
+          cp "${GITHUB_WORKSPACE}/artifact/wepapered-linux-amd64.tar.gz" "wepapered-${ver}.tar.gz"
+          chown -R builder .
+          sudo -u builder makepkg -f --noconfirm --nocheck --skipinteg
+          ls -1 ./*.pkg.tar.zst
+
+      - name: Attach package to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packaging/arch/wepapered-bin/*.pkg.tar.zst

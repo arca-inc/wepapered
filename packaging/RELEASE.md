@@ -18,22 +18,44 @@ ffmpeg version your distribution ships.
 
 ## Install
 
+### Quick (any distro)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arca-inc/wepapered/master/install.sh | sh
+```
+
+Installs the same self-contained bundle on every distro — so it works the same
+everywhere, including unsupported ones (Fedora, openSUSE, …). Defaults to a
+per-user install under `~/.local` (no root); pass `--system` for `/usr/local`. It
+installs `.desktop` launchers and a `systemd --user` service, and offers to pull
+the host runtime libraries (gtk3 / webkit2gtk / nss) via your package manager.
+Options:
+
+```bash
+curl -fsSL .../install.sh | sh -s -- --system          # system-wide (/usr/local)
+curl -fsSL .../install.sh | sh -s -- --version v1.2.3   # pin a release
+curl -fsSL .../install.sh | sh -s -- --uninstall        # remove
+```
+
+### Manual (from the archive)
+
 ```bash
 tar -xzf wepapered-linux-amd64.tar.gz
 cd wepapered
-
-# Start the daemon (renders wallpapers + serves the UI)
-./wepapered-daemon
-
-# In another terminal:
-./wepapered-gui        # Wallpaper Engine browse window
-./wepapered-settings   # settings (WE path, API key, theme…)
+./install.sh                 # same installer, bundled in the archive
+# …or run in place, no install:
+./wepapered-daemon           # renders wallpapers + serves the UI
+./wepapered-gui              # Wallpaper Engine browse window
+./wepapered-settings         # settings (WE path, API key, theme…)
 ```
 
 `wepaperedctl <daemon|gui|settings>` does the same through a single dispatcher.
 
-For a system install (binaries under `/opt`, `.desktop` launchers, a
-`systemd --user` service), see `packaging/arch/PKGBUILD` (AUR package for Arch).
+### Arch Linux
+
+`wepapered-bin` (prebuilt, this bundle) or `wepapered-git` (builds from source) —
+see `packaging/arch/`. (The `install.sh` one-liner above always installs the
+universal bundle; use these for native pacman integration.)
 
 ## Notes
 

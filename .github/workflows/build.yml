@@ -14,22 +14,32 @@ jobs:
     # GITHUB_TOKEN cannot clone a different private repo, so it is intentionally
     # NOT fetched here (fetching it aborts checkout). Only wepapered-daemon links
     # it; the other three binaries import only internal/core (pure Go) plus their
-    # own GTK/webkit and build without it. Building the daemon in CI (private
-    # submodule access + the LWE library build) is tracked in TODO.md.
+    # own GTK/webkit and build without it. The daemon + the installable bundle are
+    # built and released by bundle.yml (which holds the LWE_ACCESS_TOKEN secret).
     - uses: actions/checkout@v4
 
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.21'
+        go-version: '1.22'
 
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+        sudo apt-get install -y libgtk-3-dev libgtk-layer-shell-dev libwebkit2gtk-4.1-dev shellcheck
 
-    - name: Build binaries (everything except the daemon, which needs the private LWE submodule)
+    # Vet/test everything except the daemon (needs the private LWE submodule).
+    - name: Vet
+      run: go vet ./internal/core/... ./cmd/wepaperedctl/... ./cmd/wepapered-gui/... ./cmd/wepapered-settings/...
+
+    - name: Test
+      run: go test ./internal/core/...
+
+    - name: Build binaries (everything except the daemon)
       run: make ctl settings gui
+
+    - name: Lint installer
+      run: shellcheck install.sh
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4

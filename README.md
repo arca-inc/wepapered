@@ -1,109 +1,171 @@
-# wepapered
+<p align="center">
+  <img src="assets/logo.png" alt="WePapered" width="160">
+</p>
 
-Native Wallpaper Engine wallpapers on Linux.
+<h1 align="center">WePapered</h1>
 
-wepapered runs the official Wallpaper Engine UI (under Proton) so you browse and
-pick wallpapers in its real interface, intercepts your selection over a
-WebSocket, and renders it natively per monitor through linux-wallpaperengine
-(LWE) on a Hyprland and Wayland desktop.
+<p align="center"><b>Wallpaper Engine, running natively on Linux.</b></p>
+
+---
 
 ## What it is
 
-You browse and pick wallpapers in Wallpaper Engine's own UI. wepapered watches
-those selections, resolves the wallpaper, and renders it natively (no Wallpaper
-Engine process is kept running for display). It also writes your choices back
-into Wallpaper Engine's config so the two stay in sync, and re-asserts them if
-Wallpaper Engine clears them.
+WePapered lets you use your Wallpaper Engine wallpapers on Linux, rendered
+**natively**. You browse and pick wallpapers in WePapered's own window, and your
+choice is drawn straight onto your desktop — smooth, per-monitor, with nothing
+left running in the background to keep it on screen. **No Proton**, no Wallpaper
+Engine process kept alive.
+
+Animated scenes, videos, images and interactive web wallpapers all work, and
+your picks are remembered across reboots.
+
+## Install
+
+One command, any distro:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/arca-inc/wepapered/master/install.sh | sh
+```
+
+This downloads a ready-to-run, self-contained build and installs it for your
+user (under `~/.local`, no root needed). Useful options:
+
+```bash
+curl -fsSL .../install.sh | sh -s -- --system      # install for all users (/usr/local)
+curl -fsSL .../install.sh | sh -s -- --uninstall   # remove it
+```
+
+**Arch Linux:** available on the [AUR](https://aur.archlinux.org/) — install it
+with your preferred helper (`yay`, `paru`, …):
+
+```bash
+yay -S wepapered-bin      # prebuilt bundle (fast)
+yay -S wepapered-git      # build from source
+```
+
+**Build it yourself:** see [Build from source](#build-from-source) below.
+
+## Prerequisites
+
+**Required**
+
+- A **legitimate copy of Wallpaper Engine**, owned and installed through
+  **Steam**. WePapered uses its installed files (the browse interface and your
+  wallpapers) — it does **not** run Wallpaper Engine, and Proton is not needed.
+- **Hyprland** on a **Wayland** session (`hyprctl` is used to read your monitors).
+  Support for more window managers / desktop environments is planned.
+- An audio server — **PipeWire** or **PulseAudio** (`pactl`) — for audio-reactive
+  wallpapers and choosing the capture source.
+
+**Optional**
+
+- **playerctl** — shows the current track ("now playing") on wallpapers that
+  support media integration.
+- A notification daemon (`notify-send` / libnotify) — desktop notifications when
+  a wallpaper is applied.
+- **Steam Web API key** (free) — to browse the Workshop; add it in **Settings**.
+
+The host graphics libraries WePapered needs (gtk3, webkit2gtk, nss) are installed
+for you by the install script.
+
+## Supported environment
+
+| | Status |
+|---|---|
+| **Hyprland** on **Wayland** (x86_64) | ✅ Supported |
+| Other window managers / desktops | 🚧 Planned |
+
+
+## How to use
+
+**1. Start the WePapered daemon at login.** It renders the wallpapers and serves
+the browse window.
+
+- **Hyprland** — add it to your config so it starts with your session:
+
+  ```ini
+  # hyprland.conf
+  exec-once = wepaperedctl daemon
+  ```
+
+  Using a JavaScript-based Hyprland config instead:
+
+  ```lua
+  hl.on("hyprland.start", function ()
+    hl.exec_cmd("wepaperedctl daemon")
+  end)
+  ```
+
+- **Any other setup** — enable the bundled service, or see your compositor's
+  autostart documentation:
+
+  ```bash
+  systemctl --user enable --now wepapered
+  ```
+
+**2. Browse and pick.** Open the browse window and choose wallpapers in
+Wallpaper Engine's real UI, via WePapered Gui:
+
+```bash
+wepaperedctl gui        # or the "Wepapered" app launcher, or the tray icon
+```
+
+**3. Tweak settings** (Wallpaper Engine path, Steam API key, theme):
+
+```bash
+wepaperedctl settings   # or the "Wepapered Settings" app launcher, or the tray icon
+```
+
+> First-run tip: WePapered auto-detects your Wallpaper Engine install from the
+> usual Steam locations. To browse the Workshop, add a free Steam Web API key in
+> **Settings** (there's a `?` link next to the field that opens Steam's page).
 
 ## How it works
 
-The flow runs in one direction:
+```
+Wallpaper Engine UI  ──►  WePapered daemon  ──►  native render, one per monitor
+   (you pick here)         (intercepts pick)        (linux-wallpaperengine)
+```
 
-1. The Wallpaper Engine UI (a small JS spy injected into it) sends the selection.
-2. A WebSocket server on 127.0.0.1:9001 (path /we) receives it.
-3. The daemon updates and persists its state.
-4. One linux-wallpaperengine subprocess per Wayland output renders the wallpaper.
+You pick a wallpaper in Wallpaper Engine's own interface. WePapered intercepts
+that selection, resolves it, and draws it natively on each monitor — one
+lightweight renderer per output. Nothing from Wallpaper Engine stays running to
+display the wallpaper, and your choices are written back so the two stay in sync.
 
-Scene, video, image, and web (CEF) wallpapers are supported. Web wallpapers
-render WebGL through ANGLE, with hardware acceleration selected automatically.
+The native rendering is done by a **custom, patched build of
+linux-wallpaperengine**, based on the excellent work of
+[**Almamu**](https://github.com/Almamu) and the
+[linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine) project
+(GPL). WePapered's fork adds the bits it needs (the hot-swap / control protocol,
+web-GPU backend selection, and a few rendering fixes) on top — full credit for the
+engine goes to the upstream author and contributors.
 
-## Requirements
+## Build from source
 
-* Hyprland on Wayland (hyprctl is used to enumerate the outputs).
-* The official Wallpaper Engine, installed through Steam and run under Proton.
-* hyprpaper (used to paint the loading placeholder).
-* A normal session user (not root, because the embedded LWE and CEF cannot reach
-  Wayland as root).
-* Build tooling: Go (1.21 or newer), CMake, a C and C++ toolchain, and the GTK3
-  and webkit2gtk-4.1 development packages.
-
-## Build
-
-wepapered is a CGo project that links a prebuilt LWE shared library (the lwe
-submodule). Build the library first, then the binaries.
+WePapered links a prebuilt copy of the linux-wallpaperengine library (the `lwe`
+submodule), so build that first, then the four binaries:
 
 ```bash
-# 1. Init the submodule (first checkout only).
-git submodule update --init --recursive
+git clone https://github.com/arca-inc/wepapered
+cd wepapered
 
-# 2. Build the LWE library and helper binaries into lwe/build/output.
-cd lwe && mkdir -p build && cd build
+git submodule update --init --recursive          # first checkout only
+
+cd lwe && mkdir -p build && cd build              # build the LWE library + helpers
 cmake -DCMAKE_BUILD_TYPE=Release ..
 make
 cd ../..
 
-# 3. Build the four binaries into ./bin.
-make
+make                                              # → bin/{wepapered-daemon,-gui,-settings,wepaperedctl}
 ```
 
-The LWE submodule pins CEF 135 by default (its Alloy runtime renders windowless
-web wallpapers cleanly). CEF 148 is available with `cmake -DCEF_RELEASE=148`
-(experimental, see TODO.md).
+Needs Go (1.21+), CMake, a C/C++ toolchain, and the GTK3 + webkit2gtk-4.1 dev
+packages.
 
-## Run
+## Project
 
-Run the daemon (it detects the GPU and applies your saved wallpapers):
-
-```bash
-./bin/wepapered-daemon
-```
-
-Or go through the dispatcher:
-
-```bash
-./bin/wepaperedctl daemon      # the background renderer
-./bin/wepaperedctl gui         # the Wallpaper Engine browse window
-./bin/wepaperedctl settings    # the settings window
-```
-
-The daemon also runs a system tray with the same actions.
-
-## Configuration
-
-* Config: ~/.config/wepapered/config.json (Wallpaper Engine path, Steam API key,
-  UI theme, loading backend, custom directories).
-* State: ~/.config/wepapered/state.json (the active wallpaper per monitor).
-* The Wallpaper Engine install path is detected from common Steam locations, or
-  set it in the settings window.
-
-## Architecture
-
-Four binaries from one Go module, split so each links only the native libraries
-it needs:
-
-* wepapered-daemon (links the LWE library): the renderer, WebSocket server,
-  browse UI server, config watcher, and tray.
-* wepapered-gui (links webkit2gtk): the WebKit browse window.
-* wepapered-settings (links GTK3): the settings window.
-* wepaperedctl (no native dependencies): a thin dispatcher.
-
-Shared pure Go state lives in internal/core; the daemon subsystems in
-internal/daemon. See CLAUDE.md for the deep architecture and rendering notes.
-
-## Status
-
-Working today: native rendering per monitor, hot swapping, scene, video, image,
-and web wallpapers, hardware accelerated WebGL (detected automatically), the
-native browse window, the settings window, and the tray.
-
-See TODO.md for what is in progress, and MAINTAINERS.md for who looks after what.
+- Roadmap / known issues: [TODO.md](TODO.md)
+- Who maintains what: [MAINTAINERS.md](MAINTAINERS.md)
+- License: [MIT](LICENSE). The bundled rendering engine
+  ([linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine)) is
+  GPL and keeps its own license.

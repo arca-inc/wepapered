@@ -1,0 +1,59 @@
+# Maintainer: Warmadon (Paul Claudon) <paul.petitnicolas at gmail dot com>
+# Maintainer: David Gheghea <david.gheghea at gmail dot com>
+
+# Prebuilt-bundle package: installs the self-contained release archive
+# (binaries + the LWE runtime + libcef + the bundled media-codec closure, already
+# rpath'd to $ORIGIN) instead of building CEF/LWE from source like wepapered-git.
+# Fast to install; this is what the universal install.sh and CI use.
+pkgname=wepapered-bin
+_pkgname=wepapered
+pkgver=0
+pkgrel=1
+pkgdesc='Wallpaper Engine wallpapers rendered natively on Hyprland and Wayland (prebuilt)'
+arch=('x86_64')
+url='https://github.com/arca-inc/wepapered'
+license=('MIT')
+depends=('gtk3' 'gtk-layer-shell' 'webkit2gtk-4.1' 'hyprland' 'nss')
+optdepends=('hyprpaper: loading placeholder backend'
+            'swww: alternative loading placeholder backend')
+provides=('wepapered')
+conflicts=('wepapered' 'wepapered-git')
+# The bundle ships prebuilt binaries and the CEF/LWE shared libs with $ORIGIN
+# rpaths already set; stripping/LTO/buildflags must not touch them.
+options=('!strip' '!debug' '!lto' '!buildflags')
+install=wepapered.install
+# The release asset is unversioned; rename it per-version on download. SKIP: the
+# checksum tracks each rolling build — pin it for a stable AUR release.
+source=("${_pkgname}-${pkgver}.tar.gz::${url}/releases/download/v${pkgver}/wepapered-linux-amd64.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+	local _libdir="${pkgdir}/usr/lib/wepapered"
+	install -dm755 "${_libdir}"
+	# The whole self-contained bundle (binaries + LWE runtime + libs + assets +
+	# packaging files) lands in one dir; everything resolves via $ORIGIN.
+	cp -a "${srcdir}/${_pkgname}/." "${_libdir}/"
+
+	# User-facing commands on PATH, symlinked back into /usr/lib/wepapered so the
+	# binaries still find each other and the LWE runtime via /proc/self/exe.
+	install -dm755 "${pkgdir}/usr/bin"
+	local _b
+	for _b in wepaperedctl wepapered-daemon wepapered-gui wepapered-settings; do
+		ln -s "/usr/lib/wepapered/${_b}" "${pkgdir}/usr/bin/${_b}"
+	done
+
+	# Desktop entries, icon and the systemd user service (shipped inside the
+	# bundle under packaging/ and assets/).
+	install -Dm644 "${_libdir}/packaging/wepapered.desktop" \
+		"${pkgdir}/usr/share/applications/wepapered.desktop"
+	install -Dm644 "${_libdir}/packaging/wepapered-settings.desktop" \
+		"${pkgdir}/usr/share/applications/wepapered-settings.desktop"
+	install -Dm644 "${_libdir}/assets/logo.png" \
+		"${pkgdir}/usr/share/pixmaps/wepapered.png"
+	install -Dm644 "${_libdir}/packaging/wepapered.service" \
+		"${pkgdir}/usr/lib/systemd/user/wepapered.service"
+
+	# License (shipped inside the bundle).
+	install -Dm644 "${_libdir}/LICENSE" \
+		"${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
