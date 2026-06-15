@@ -183,9 +183,8 @@ func sendCtrlStop(sockPath string) {
 // ── Environment helpers ───────────────────────────────────────────────────────
 
 // waylandEnvOverrides builds a subprocess environment for the session's Wayland
-// compositor: the shared core base env, plus the active compositor's vars (e.g.
-// Hyprland's instance signature, only when our own env lacks them) and the given
-// extras on top.
+// compositor: the shared core base env, plus any compositor-specific overrides
+// (only when our own env lacks them) and the given extras on top.
 func waylandEnvOverrides(extra map[string]string) []string {
 	overrides := map[string]string{}
 	for k, v := range sys.EnvOverrides() {

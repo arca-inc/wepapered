@@ -36,7 +36,7 @@ func Run() {
 	}
 
 	// Detect the windowing system. With no supported compositor (e.g. started
-	// outside a Hyprland/Wayland session) there's nothing to render on — exit
+	// outside a Wayland session) there's nothing to render on — exit
 	// cleanly (status 0) so a systemd Restart=on-failure doesn't loop.
 	comp, err := compositor.Detect()
 	if err != nil {

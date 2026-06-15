@@ -23,11 +23,11 @@ func TestDetect(t *testing.T) {
 	}
 }
 
-func TestHyprlandIsCompositor(t *testing.T) {
-	// Compile-time + behavior check that Hyprland satisfies the interface.
-	var c Compositor = &Hyprland{}
-	if c.Name() != "hyprland" {
-		t.Fatalf("Name() = %q; want hyprland", c.Name())
+func TestWaylandIsCompositor(t *testing.T) {
+	// Compile-time + behavior check that Wayland satisfies the interface.
+	var c Compositor = &Wayland{}
+	if c.Name() != "wayland-native" {
+		t.Fatalf("Name() = %q; want wayland-native", c.Name())
 	}
 	// EnvOverrides must never panic and returns a (possibly empty/nil) map.
 	_ = c.EnvOverrides()
