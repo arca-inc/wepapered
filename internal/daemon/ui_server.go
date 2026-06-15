@@ -383,13 +383,26 @@ function wepInstallPropPatch(val) {
 
 // wepInstallFeaturePatch overrides controller-level entry points for features we
 // don't bridge yet that DON'T go through the host bridge (so the proxy can't catch
-// them). "Open from URL" opens a local WE modal directly via the modals service —
-// replace the method so it shows the "not available yet" dialog instead.
+// them). Each method is patched independently and idempotently (per-function
+// marker), so it's safe to call on every state push.
 function wepInstallFeaturePatch(val) {
-	if (!val || val.__wepFeaturePatched) return;
-	if (typeof val.openFromUrl !== 'function') return;
-	val.__wepFeaturePatched = true;
-	val.openFromUrl = function() { wepShowFeatureUnavailable(); };
+	if (!val) return;
+	// "Open from URL" opens a local WE modal directly via the modals service.
+	if (typeof val.openFromUrl === 'function' && !val.openFromUrl.__wepPatched) {
+		val.openFromUrl = function() { wepShowFeatureUnavailable(); };
+		val.openFromUrl.__wepPatched = true;
+	}
+	// Screensaver: entering the "screensaver" config group is the user-facing entry
+	// point (the Screensaver toggle). Block only that group — the normal "wallpaper"
+	// group must keep working.
+	if (typeof val.changeConfigGroup === 'function' && !val.changeConfigGroup.__wepPatched) {
+		var origChangeConfigGroup = val.changeConfigGroup.bind(val);
+		val.changeConfigGroup = function(g) {
+			if (g === 'screensaver') { wepShowFeatureUnavailable(); return; }
+			return origChangeConfigGroup(g);
+		};
+		val.changeConfigGroup.__wepPatched = true;
+	}
 }
 
 var _browseWallpapersCtrl;
