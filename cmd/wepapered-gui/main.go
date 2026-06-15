@@ -3,11 +3,12 @@
 // directly on webkit2gtk-4.1 + GTK3; links no LWE/GTK-settings code, only webkit
 // + internal/core.
 //
-// The browse UI is served by the daemon (127.0.0.1:9001). This window does not
-// start the daemon: it shows the UI when the daemon is reachable and a "can't
-// reach the daemon" screen (hinting `wepaperedctl daemon`) when it isn't, polling
-// every couple of seconds so it reconnects automatically and falls back if the
-// daemon goes away.
+// The browse UI is served by the daemon on a random local port, discovered via the
+// daemon's Unix control socket (see internal/core). This window does not start the
+// daemon: it shows the UI when the daemon is reachable and a "can't reach the
+// daemon" screen (hinting `wepaperedctl daemon`) when it isn't, polling every
+// couple of seconds so it reconnects automatically and falls back if the daemon
+// goes away (re-querying the port, which may change across daemon restarts).
 
 package main
 
@@ -18,9 +19,11 @@ package main
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+
+// Implemented in Go (bridge.go): daemon reachability + current UI URL, both via
+// the daemon's Unix control socket.
+extern int wepDaemonUp(void);
+extern char *wepDaemonURL(void);
 
 static void on_destroy(GtkWidget *w, gpointer d) { gtk_main_quit(); }
 
@@ -64,7 +67,7 @@ static void on_script_message(WebKitUserContentManager *m, WebKitJavascriptResul
     g_free(str);
 }
 
-// Shown when the daemon's control port (127.0.0.1:9001) is unreachable.
+// Shown when the daemon is unreachable.
 static const char *DAEMON_DOWN_HTML =
 "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
 "html,body{height:100%;margin:0}"
@@ -87,42 +90,56 @@ static const char *DAEMON_DOWN_HTML =
 "<div class='hint'>This window reconnects automatically once the daemon is up.</div>"
 "</div></body></html>";
 
-// daemon_reachable reports whether something is listening on 127.0.0.1:9001.
-// A connect() to loopback returns immediately (success or ECONNREFUSED), so this
-// is safe to call from the GTK main loop.
-static gboolean daemon_reachable(void) {
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return FALSE;
-    struct sockaddr_in a;
-    memset(&a, 0, sizeof(a));
-    a.sin_family = AF_INET;
-    a.sin_port = htons(9001);
-    inet_pton(AF_INET, "127.0.0.1", &a.sin_addr);
-    int r = connect(fd, (struct sockaddr *)&a, sizeof(a));
-    close(fd);
-    return r == 0 ? TRUE : FALSE;
-}
-
 typedef struct {
     WebKitWebView *wv;
-    char *url;
-    int showing_ui; // 1 = browse UI loaded, 0 = down screen loaded
+    char *override_url; // non-NULL: explicit URL (debug arg); else ask the daemon
+    char *loaded_url;   // URL currently loaded; NULL = down screen showing
 } AppCtx;
 
-static void show_ui(AppCtx *c)   { webkit_web_view_load_uri(c->wv, c->url); c->showing_ui = 1; }
-static void show_down(AppCtx *c) { webkit_web_view_load_html(c->wv, DAEMON_DOWN_HTML, NULL); c->showing_ui = 0; }
+static void load_url(AppCtx *c, const char *u) {
+    webkit_web_view_load_uri(c->wv, u);
+    g_free(c->loaded_url);
+    c->loaded_url = g_strdup(u);
+}
+static void show_down(AppCtx *c) {
+    webkit_web_view_load_html(c->wv, DAEMON_DOWN_HTML, NULL);
+    g_free(c->loaded_url);
+    c->loaded_url = NULL;
+}
 
-// Polled from the GTK main loop: swap between the UI and the down screen only on
-// a state change, so the UI is not reloaded on every tick.
+// Polled from the GTK main loop. Recovery keys on the URL, not just up/down: the
+// daemon binds a NEW random port on every start, so a restart changes the URL —
+// even a restart that completes entirely between two polls, where the window never
+// observes a "down" tick. So (re)load whenever the daemon's current URL differs
+// from what's loaded, and drop to the down screen when it's unreachable.
 static gboolean poll_daemon(gpointer data) {
     AppCtx *c = (AppCtx *)data;
-    gboolean up = daemon_reachable();
-    if (up && !c->showing_ui)      show_ui(c);
-    else if (!up && c->showing_ui) show_down(c);
+    if (c->override_url) {
+        if (c->loaded_url == NULL) load_url(c, c->override_url);
+        return G_SOURCE_CONTINUE;
+    }
+    char *u = wepDaemonURL(); // "" if the daemon is unreachable
+    if (u && u[0]) {
+        if (c->loaded_url == NULL || g_strcmp0(c->loaded_url, u) != 0) load_url(c, u);
+    } else if (c->loaded_url != NULL) {
+        show_down(c);
+    }
+    if (u) free(u);
     return G_SOURCE_CONTINUE;
 }
 
-void run_ui_window(const char *url, int width, int height) {
+// On a failed navigation (e.g. the daemon restarted on a new port and refuses the
+// old URL) drop to the down screen so the next poll re-queries the port and
+// reloads — recovers at once instead of waiting to catch a "down" tick.
+static gboolean on_load_failed(WebKitWebView *wv, WebKitLoadEvent ev, gchar *uri,
+                               GError *err, gpointer d) {
+    AppCtx *c = (AppCtx *)d;
+    if (c->override_url) return FALSE; // debug override: let WebKit show the error
+    show_down(c);
+    return TRUE; // suppress WebKit's default error page
+}
+
+void run_ui_window(const char *override_url, int width, int height) {
     // Force X11/XWayland backend — WebKitWebProcess crashes on raw Wayland
     // sockets due to a protocol error (EPROTO/71) with webkit2gtk-4.1.
     g_setenv("GDK_BACKEND", "x11", TRUE);
@@ -167,10 +184,13 @@ void run_ui_window(const char *url, int width, int height) {
 
     AppCtx *ctx = g_new0(AppCtx, 1);
     ctx->wv = wv;
-    ctx->url = g_strdup(url);
+    ctx->override_url = (override_url && override_url[0]) ? g_strdup(override_url) : NULL;
+    g_signal_connect(wv, "load-failed", G_CALLBACK(on_load_failed), ctx);
 
-    // Initial content from the current reachability, then poll to keep in sync.
-    if (daemon_reachable()) show_ui(ctx); else show_down(ctx);
+    // Show the down screen, then immediately poll (loads the UI at once if the
+    // daemon is already up) and keep polling to track restarts / port changes.
+    show_down(ctx);
+    poll_daemon(ctx);
     g_timeout_add_seconds(2, poll_daemon, ctx);
 
     gtk_widget_show_all(win);
@@ -182,8 +202,6 @@ import "C"
 import (
 	"os"
 	"unsafe"
-
-	"wepapered/internal/core"
 )
 
 func main() {
@@ -194,13 +212,14 @@ func main() {
 	os.Unsetenv("WAYLAND_DISPLAY")
 	os.Setenv("WEBKIT_DISABLE_COMPOSITING_MODE", "1")
 
-	cfg, _ := core.LoadConfig()
-	url := core.GUIURL(cfg)
+	// No URL normally — the window asks the daemon for its (random) port via the
+	// control socket. An explicit arg overrides it, for debugging.
+	override := ""
 	if len(os.Args) > 1 {
-		url = os.Args[1] // explicit URL override, for debugging
+		override = os.Args[1]
 	}
 
-	curl := C.CString(url)
+	curl := C.CString(override)
 	defer C.free(unsafe.Pointer(curl))
 
 	C.run_ui_window(curl, 1280, 780)

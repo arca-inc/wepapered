@@ -49,13 +49,27 @@ func Run() {
 		}
 	}
 
-	// Bind the control port FIRST as a single-instance gate. If another daemon
-	// already owns it, exit now — before touching renderers — so we never end up
-	// with two daemons fighting over the same outputs (which crash-loops LWE).
-	ws := newWSServer(cfg)
-	if err := ws.Start(controlAddr); err != nil {
-		log.Fatalf("[wepapered] a daemon is already running (%s in use); not starting a second. (%v)", controlAddr, err)
+	// Acquire the control socket FIRST as a single-instance gate. If another daemon
+	// already owns it, exit now — before touching renderers — so we never end up with
+	// two daemons fighting over the same outputs (which crash-loops LWE).
+	ctrlLn, err := acquireControlSocket()
+	if err != nil {
+		log.Fatalf("[wepapered] not starting (%v); control socket %s", err, controlSocketPath())
 	}
+
+	// Serve the browse UI / WebSocket on a random loopback port; clients discover it
+	// over the control socket (no fixed, guessable port).
+	httpLn, port, err := listenRandomPort()
+	if err != nil {
+		ctrlLn.Close()
+		log.Fatalf("[wepapered] %v", err)
+	}
+
+	ws := newWSServer(cfg)
+	ws.port = port
+	ws.Serve(httpLn)
+	ws.ServeControl(ctrlLn)
+	log.Printf("[wepapered] control socket %s → UI port %d", controlSocketPath(), port)
 
 	// Clean up any renderers orphaned by a previous instance that didn't shut
 	// down cleanly, so we don't end up with duplicate processes per output.
@@ -102,7 +116,7 @@ func Run() {
 		log.Printf("watcher start failed (continuing without WE config re-assert): %v", err)
 	}
 
-	tray := newTrayManager(cfg)
+	tray := newTrayManager(cfg, port)
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
@@ -121,4 +135,5 @@ func Run() {
 	w.Stop()
 	ws.renderer.Stop()
 	ws.discord.Close()
+	ctrlLn.Close() // unlinks the control socket file
 }

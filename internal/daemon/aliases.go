@@ -19,9 +19,10 @@ var (
 	lwesubprocessbin = core.LWESubprocessBin
 
 	siblingBinary = core.SiblingBinary
+
+	acquireControlSocket = core.AcquireControlSocket
+	listenRandomPort     = core.ListenRandomPort
+	controlSocketPath    = core.ControlSocketPath
 )
 
-const (
-	controlAddr    = core.ControlAddr
-	settingsBinary = core.SettingsBinary
-)
+const settingsBinary = core.SettingsBinary

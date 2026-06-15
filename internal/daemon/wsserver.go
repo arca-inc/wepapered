@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -44,6 +45,10 @@ type WSServer struct {
 	watcher      *Watcher // set in run.go; lets reload re-point the config watch
 	discord      *DiscordRP
 	playlists    *PlaylistEngine // per-monitor wallpaper rotation
+
+	// port is the random loopback TCP port the browse UI / WebSocket server is
+	// bound to (picked at startup). Reported to clients over the control socket.
+	port int
 
 	// stateMu guards all access to s.state (its maps and fields) and serializes the
 	// persist+snapshot sequence, since the playlist engine mutates state from timer
@@ -91,7 +96,7 @@ func (s *WSServer) updateDiscordPresence() {
 	s.discord.SetActivity("Patched for Linux", "")
 }
 
-func (s *WSServer) Start(addr string) error {
+func (s *WSServer) Serve(ln net.Listener) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/we", s.handle)
 	mux.HandleFunc("/reload", s.handleReload)
@@ -145,19 +150,54 @@ func (s *WSServer) Start(addr string) error {
 		}
 		http.ServeFile(w, r, p)
 	})
-	// Bind synchronously so the caller can detect "port already in use" (another
-	// instance) and refuse to start a second, competing daemon.
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
+	// The listener is bound by the caller (core.ListenRandomPort) so the chosen
+	// port can be advertised over the control socket before serving begins.
 	go func() {
-		log.Printf("[wepapered] WS server on %s", addr)
+		log.Printf("[wepapered] WS/UI server on %s", ln.Addr())
 		if err := http.Serve(ln, mux); err != nil {
 			log.Printf("[wepapered] WS error: %v", err)
 		}
 	}()
-	return nil
+}
+
+// ServeControl runs the daemon's Unix control-socket accept loop. The socket is the
+// stable rendezvous clients (gui/ctl/settings) use to discover the random UI port
+// (PORT) and request a reload (RELOAD).
+func (s *WSServer) ServeControl(ln net.Listener) {
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return // listener closed on shutdown
+			}
+			go s.handleControlConn(c)
+		}
+	}()
+}
+
+// handleControlConn serves one control-socket request: a single command line, a
+// single reply line.
+//   PORT   → "<port>\n"
+//   RELOAD → "OK\n" (or "ERR <msg>\n")
+func (s *WSServer) handleControlConn(c net.Conn) {
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil && line == "" {
+		return
+	}
+	switch strings.TrimSpace(line) {
+	case "PORT":
+		fmt.Fprintf(c, "%d\n", s.port)
+	case "RELOAD":
+		if err := s.doReload(); err != nil {
+			fmt.Fprintf(c, "ERR %v\n", err)
+		} else {
+			fmt.Fprintln(c, "OK")
+		}
+	default:
+		fmt.Fprintln(c, "ERR unknown command")
+	}
 }
 
 // handleReload re-reads the on-disk config and relaunches the renderers so settings
@@ -165,11 +205,23 @@ func (s *WSServer) Start(addr string) error {
 // take effect without restarting the daemon. Triggered by `wepaperedctl reload` and by
 // the settings window on save.
 func (s *WSServer) handleReload(w http.ResponseWriter, r *http.Request) {
+	if err := s.doReload(); err != nil {
+		log.Printf("[wepapered] reload: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "reloaded")
+}
+
+// doReload re-reads the on-disk config and relaunches the renderers so settings
+// changes (audio device, preferred player, now-playing text, theme, custom dirs, …)
+// take effect without restarting the daemon. Shared by the control socket (RELOAD),
+// the HTTP /reload endpoint, and the tray.
+func (s *WSServer) doReload() error {
 	newCfg, err := loadConfig()
 	if err != nil {
-		log.Printf("[wepapered] reload: config load error: %v", err)
-		http.Error(w, "config load error", http.StatusInternalServerError)
-		return
+		return fmt.Errorf("config load error: %w", err)
 	}
 	// Repair the WE path the same way startup does, so a bad saved path doesn't break.
 	if !weDirValid(newCfg.WEPath) {
@@ -192,9 +244,7 @@ func (s *WSServer) handleReload(w http.ResponseWriter, r *http.Request) {
 	reloadSnap := s.state.snapshot()
 	s.stateMu.Unlock()
 	go s.renderer.Reload(reloadSnap)
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "reloaded")
+	return nil
 }
 
 func (s *WSServer) handle(w http.ResponseWriter, r *http.Request) {

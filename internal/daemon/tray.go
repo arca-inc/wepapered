@@ -13,11 +13,12 @@ import (
 )
 
 type TrayManager struct {
-	cfg *Config
+	cfg  *Config
+	port int // the daemon's browse-UI port, for the xdg-open fallback URL
 }
 
-func newTrayManager(cfg *Config) *TrayManager {
-	return &TrayManager{cfg: cfg}
+func newTrayManager(cfg *Config, port int) *TrayManager {
+	return &TrayManager{cfg: cfg, port: port}
 }
 
 func (t *TrayManager) Run() {
@@ -69,7 +70,7 @@ func (t *TrayManager) openWEBrowser() {
 		return
 	}
 	// Fallback to a browser if the gui binary isn't shipped alongside.
-	exec.Command("xdg-open", core.GUIURL(t.cfg)).Start() //nolint
+	exec.Command("xdg-open", core.GUIURL(t.cfg, t.port)).Start() //nolint
 }
 
 // openConfigUI launches the wepapered-settings GTK window.
