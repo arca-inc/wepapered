@@ -17,10 +17,12 @@
 GO  ?= go
 BIN ?= bin
 
-# Build version baked into the binaries (wepaperedctl --version, daemon log).
-# Override per build: `make VERSION=r123.abc1234`. Defaults to "dev".
+# Build metadata baked into the binaries (wepaperedctl --version, daemon log).
+# Override per build: `make VERSION=r123.abc1234 DATE=2026-06-15`. VERSION
+# defaults to "dev"; DATE defaults to this checkout's commit date when in a git repo.
 VERSION   ?= dev
-GOLDFLAGS ?= -X wepapered/internal/core.Version=$(VERSION)
+DATE      ?= $(shell git show -s --format=%cd --date=short HEAD 2>/dev/null)
+GOLDFLAGS ?= -X wepapered/internal/core.Version=$(VERSION) -X wepapered/internal/core.Date=$(DATE)
 
 .PHONY: all daemon gui settings ctl vet clean
 

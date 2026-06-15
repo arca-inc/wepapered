@@ -45,7 +45,7 @@ func main() {
 		usage()
 		return
 	case "version", "--version", "-v":
-		fmt.Println("wepapered " + core.Version)
+		fmt.Println(core.VersionString())
 		return
 	case "reload":
 		if err := core.ReloadDaemon(); err != nil {
