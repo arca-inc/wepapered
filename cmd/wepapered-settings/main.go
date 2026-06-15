@@ -169,8 +169,20 @@ func runConfigUI(cfg *core.Config) {
 		}
 	})
 
+	// Hint marker beside the field: opens Steam's API-key page in the browser. A
+	// "?" text label is used rather than a themed icon name so it renders in any
+	// icon theme.
+	const apiKeyURL = "https://steamcommunity.com/dev/apikey"
+	apiHint, _ := gtk.ButtonNewWithLabel("?")
+	apiHint.SetRelief(gtk.RELIEF_NONE)
+	apiHint.SetTooltipText("Get a Steam Web API key (opens " + apiKeyURL + ")")
+	apiHint.Connect("clicked", func() {
+		exec.Command("xdg-open", apiKeyURL).Start() //nolint
+	})
+
 	apiBox.PackStart(apiLabel, false, false, 0)
 	apiBox.PackStart(apiEntry, true, true, 0)
+	apiBox.PackStart(apiHint, false, false, 0)
 
 	// ── Theme (GUI skin) ──────────────────────────────────────────────────────
 	themeBox, _ := gtk.BoxNew(gtk.ORIENTATION_HORIZONTAL, 8)
