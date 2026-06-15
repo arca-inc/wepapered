@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -685,7 +686,12 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 		lwebin,
 		"--assets-dir", assetsDir,
 		"--silent",
-		"--fps", "30",
+		"--fps", strconv.Itoa(func() int {
+			if r.cfg.FPS > 0 {
+				return r.cfg.FPS
+			}
+			return 30
+		}()),
 		// No --no-audio-processing: let LWE enable system-audio capture, which it
 		// already gates to wallpapers declaring supportsaudioprocessing (audio
 		// visualizers). Drives wallpaperRegisterAudioListener on web + the scene

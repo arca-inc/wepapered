@@ -44,6 +44,10 @@ type Config struct {
 	// Favorites are the wallpaper identity keys (UIWallpaper.File) the user has
 	// favorited in the WE UI (heart). Persisted so favorites survive restarts.
 	Favorites []string `json:"favorites,omitempty"`
+	// FPS is the target frame rate passed to LWE (--fps). Default 30. Set to
+	// 60 for 60 Hz monitors or higher for high-refresh displays. Values above
+	// the monitor's refresh rate are pointless but harmless.
+	FPS int `json:"fps,omitempty"`
 }
 
 func ConfigPath() string {
@@ -59,6 +63,7 @@ func DefaultConfig() *Config {
 		WEPath:      AutoDetectWEPath(),
 		GuiSkin:     "skindark",
 		Assignments: map[string]string{},
+		FPS:         30,
 	}
 }
 
