@@ -93,7 +93,7 @@ the browse window.
   exec-once = wepaperedctl daemon
   ```
 
-  Using a JavaScript-based Hyprland config instead:
+  Using a Lua-based Hyprland config instead:
 
   ```lua
   hl.on("hyprland.start", function ()
