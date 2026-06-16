@@ -34,6 +34,7 @@ func (t *TrayManager) onReady() {
 	mBrowse := systray.AddMenuItem("Change Wallpapers...", "Open the WE UI to browse installed wallpapers")
 	mConfig := systray.AddMenuItem("Configuration", "Open the WePapered configuration menu")
 	mReload := systray.AddMenuItem("Reload", "Reload config and restart the wallpapers")
+	mClearCache := systray.AddMenuItem("Clear Shaders Cache", "Delete cached shader binaries and restart wallpapers")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit WePapered and close wallpapers")
 
@@ -46,6 +47,8 @@ func (t *TrayManager) onReady() {
 				t.openConfigUI()
 			case <-mReload.ClickedCh:
 				t.reload()
+			case <-mClearCache.ClickedCh:
+				t.clearCache()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 			}
@@ -61,6 +64,16 @@ func (t *TrayManager) reload() {
 		return
 	}
 	log.Printf("[wepapered] tray: reload requested")
+}
+
+func (t *TrayManager) clearCache() {
+	cacheDir, err := os.UserCacheDir()
+	if err == nil {
+		shaderCache := filepath.Join(cacheDir, "linux-wallpaperengine", "programs")
+		os.RemoveAll(shaderCache)
+		log.Printf("[wepapered] tray: cleared shader cache at %s", shaderCache)
+	}
+	t.reload()
 }
 
 // openWEBrowser launches the wepapered-gui WebKit window. The daemon is already
