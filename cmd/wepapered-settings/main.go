@@ -302,6 +302,14 @@ func runConfigUI(cfg *core.Config) {
 		"Push the current track's title/artist (from playerctl/MPRIS) into web wallpapers " +
 			"that show a header label, e.g. audio visualizers. Overrides their header text while playing.")
 
+	// ── Fetch album art (MPRIS proxy) ─────────────────────────────────────────
+	artCheck, _ := gtk.CheckButtonNewWithLabel("Fetch album art when the player provides none")
+	artCheck.SetActive(cfg.AlbumArtEnabled())
+	artCheck.SetTooltipText(
+		"Run a proxy that resolves the cover art (YouTube thumbnail from the track URL, or the " +
+			"iTunes Search API by artist+title) when the media player doesn't expose any — so " +
+			"now-playing wallpapers show album art even with players like Firefox. Restart to apply.")
+
 	// ── Custom wallpaper directories ──────────────────────────────────────────
 	dirs := append([]string{}, cfg.CustomDirs...)
 
@@ -387,6 +395,8 @@ func runConfigUI(cfg *core.Config) {
 		cfg.AudioDevice = monCombo.GetActiveID()
 		cfg.MediaPlayer = playerCombo.GetActiveID()
 		cfg.NowPlayingText = npCheck.GetActive()
+		artEnabled := artCheck.GetActive()
+		cfg.FetchAlbumArt = &artEnabled
 		cfg.FPS = int(fpsSpin.GetValueAsInt())
 		cfg.CustomDirs = dirs
 
@@ -411,6 +421,7 @@ func runConfigUI(cfg *core.Config) {
 	box.PackStart(audioBox, false, false, 0)
 	box.PackStart(playerBox, false, false, 0)
 	box.PackStart(npCheck, false, false, 0)
+	box.PackStart(artCheck, false, false, 0)
 	box.PackStart(sep, false, false, 4)
 	box.PackStart(dirsHeader, false, false, 0)
 	box.PackStart(dirsHint, false, false, 0)

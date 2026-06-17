@@ -48,6 +48,19 @@ type Config struct {
 	// 60 for 60 Hz monitors or higher for high-refresh displays. Values above
 	// the monitor's refresh rate are pointless but harmless.
 	FPS int `json:"fps,omitempty"`
+	// FetchAlbumArt, when enabled, runs an MPRIS proxy player that mirrors the active
+	// player and resolves the album art (YouTube thumbnail from the track URL, or
+	// the iTunes Search API by artist+title) when the real player exposes none —
+	// so now-playing wallpapers show cover art even with players like Firefox that
+	// don't provide mpris:artUrl. LWE is pointed at the proxy via LWE_MEDIA_PLAYER.
+	// Pointer so absent (older configs) defaults to ON; use AlbumArtEnabled().
+	FetchAlbumArt *bool `json:"fetch_album_art,omitempty"`
+}
+
+// AlbumArtEnabled reports whether the album-art MPRIS proxy should run. Defaults
+// to true when unset (the field is opt-out, checked-by-default in the settings UI).
+func (c *Config) AlbumArtEnabled() bool {
+	return c.FetchAlbumArt == nil || *c.FetchAlbumArt
 }
 
 func ConfigPath() string {

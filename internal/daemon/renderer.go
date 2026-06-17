@@ -676,8 +676,12 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 	if r.cfg.NowPlayingText {
 		env = append(env, "LWE_MEDIA_TO_TEXT=1")
 	}
-	// Preferred MPRIS player priority list for now-playing (e.g. "spotify,%any").
-	if mp := strings.TrimSpace(r.cfg.MediaPlayer); mp != "" {
+	// Media source: when the album-art proxy runs, read it (it mirrors the active
+	// player and adds resolved cover art); otherwise use the user's preferred
+	// player list directly.
+	if r.cfg.AlbumArtEnabled() {
+		env = append(env, "LWE_MEDIA_PLAYER="+mediaProxyIdentity)
+	} else if mp := strings.TrimSpace(r.cfg.MediaPlayer); mp != "" {
 		env = append(env, "LWE_MEDIA_PLAYER="+mp)
 	}
 

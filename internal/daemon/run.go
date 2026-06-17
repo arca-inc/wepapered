@@ -97,6 +97,15 @@ func Run() {
 	go ws.discord.Run()
 	ws.updateDiscordPresence()
 
+	// Album-art MPRIS proxy: mirrors the active player and fills in cover art when
+	// the real player (e.g. Firefox) exposes none, so now-playing wallpapers show
+	// album art. LWE is pointed at it via LWE_MEDIA_PLAYER (see renderer).
+	if cfg.AlbumArtEnabled() {
+		if mp := startMediaProxy(cfg.MediaPlayer); mp != nil {
+			defer mp.close()
+		}
+	}
+
 	// Resume per-monitor playlists (arms rotation timers and mirrors each
 	// playlist's current item into state) before the initial render.
 	ws.playlists.StartAll()
