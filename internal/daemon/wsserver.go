@@ -770,6 +770,17 @@ func (s *WSServer) resolveWallpaper(winPath, monitor string) *MonitorWallpaper {
 		mw.Type = meta.Type
 		mw.PreviewFile = meta.Preview
 	}
+	// Restore previously-customized properties for this wallpaper (colors, toggles)
+	// so re-selecting it keeps the user's overrides instead of reverting to defaults.
+	// Cached overrides win over preset defaults.
+	if cached := s.state.WallpaperProps[winPath]; len(cached) > 0 {
+		if mw.Props == nil {
+			mw.Props = make(map[string]string, len(cached))
+		}
+		for k, v := range cached {
+			mw.Props[k] = v
+		}
+	}
 	return mw
 }
 
@@ -1189,6 +1200,14 @@ func (s *WSServer) onApplyProperty(args []interface{}) {
 	} else {
 		apply(monitor)
 	}
+	// Cache the overrides per-wallpaper so switching away and back restores them
+	// (WE only pushes a wallpaper's properties on first load, not on re-select).
+	if mw.WinPath != "" {
+		if s.state.WallpaperProps == nil {
+			s.state.WallpaperProps = map[string]map[string]string{}
+		}
+		s.state.WallpaperProps[mw.WinPath] = merged
+	}
 	if err := saveState(s.state); err != nil {
 		log.Printf("[wepapered] state save error: %v", err)
 	}
@@ -1215,6 +1234,9 @@ func (s *WSServer) onResetProperties(args []interface{}) {
 		if mw == nil || (mw.WinPath != file && mw.LinuxPath != file) {
 			continue
 		}
+		// Drop cached overrides first so resolveWallpaper returns true defaults
+		// (it would otherwise restore the very overrides we are resetting).
+		delete(s.state.WallpaperProps, mw.WinPath)
 		c := *mw
 		if def := s.resolveWallpaper(mw.WinPath, label); def != nil {
 			c.Props = def.Props

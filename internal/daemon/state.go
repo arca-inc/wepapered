@@ -78,6 +78,11 @@ type DaemonState struct {
 	// clone groups / splits) stored verbatim and restored as wallpaperconfig.profile.
 	// Updated via updateProfile.
 	MonitorProfile json.RawMessage `json:"monitor_profile,omitempty"`
+	// WallpaperProps caches per-wallpaper property overrides (colors, toggles, …)
+	// keyed by Windows path. WE only pushes a wallpaper's properties on first load,
+	// not when you switch back to it, so without this cache re-selecting a wallpaper
+	// reverts to defaults until a reload. Updated on every property change.
+	WallpaperProps map[string]map[string]string `json:"wallpaper_props,omitempty"`
 }
 
 // snapshot returns an independent copy for rollback. The map entries are never
