@@ -114,9 +114,41 @@ static struct my_output *get_first_output() {
 */
 import "C"
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"sort"
 )
+
+// hyprlandPositions returns each monitor's logical position (keyed by output
+// name) from `hyprctl monitors -j`. wl_output's geometry event reports (0,0) for
+// every output on Hyprland (the real logical position lives in the xdg-output
+// protocol), which collapses multi-monitor layouts onto each other — both in the
+// renderer's left-to-right mapping and in WE's screen picker. Only attempted when
+// running under Hyprland; returns nil otherwise so the wl_output values stand.
+func hyprlandPositions() map[string][2]int {
+	if os.Getenv("HYPRLAND_INSTANCE_SIGNATURE") == "" {
+		return nil
+	}
+	out, err := exec.Command("hyprctl", "monitors", "-j").Output()
+	if err != nil {
+		return nil
+	}
+	var mons []struct {
+		Name string `json:"name"`
+		X    int    `json:"x"`
+		Y    int    `json:"y"`
+	}
+	if json.Unmarshal(out, &mons) != nil {
+		return nil
+	}
+	pos := make(map[string][2]int, len(mons))
+	for _, m := range mons {
+		pos[m.Name] = [2]int{m.X, m.Y}
+	}
+	return pos
+}
 
 // Wayland natively enumerates monitors via the wl_output protocol.
 type Wayland struct{}
@@ -154,6 +186,17 @@ func (w *Wayland) Outputs() ([]Output, error) {
 
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("no wayland outputs found or failed to connect to display")
+	}
+
+	// Correct logical positions from Hyprland when available (wl_output.geometry
+	// reports 0,0 for every output, which stacks monitors).
+	if pos := hyprlandPositions(); pos != nil {
+		for i := range raw {
+			if p, ok := pos[raw[i].Name]; ok {
+				raw[i].X = p[0]
+				raw[i].Y = p[1]
+			}
+		}
 	}
 
 	sort.Slice(raw, func(i, j int) bool {
