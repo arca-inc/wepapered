@@ -83,6 +83,28 @@ func newWSServer(cfg *Config) *WSServer {
 	}
 	s.cfg.Store(cfg)
 	s.playlists = newPlaylistEngine(s)
+	// Seed the per-wallpaper override cache from whatever is currently applied, so
+	// the colours already showing survive the first switch-away-and-back even
+	// before WE next pushes them.
+	if s.state != nil {
+		if s.state.WallpaperProps == nil {
+			s.state.WallpaperProps = map[string]map[string]string{}
+		}
+		seeded := false
+		for _, mw := range s.state.Monitors {
+			if mw != nil && mw.WinPath != "" && len(mw.Props) > 0 {
+				if _, ok := s.state.WallpaperProps[mw.WinPath]; !ok {
+					s.state.WallpaperProps[mw.WinPath] = mw.Props
+					seeded = true
+				}
+			}
+		}
+		if seeded {
+			if err := saveState(s.state); err != nil {
+				log.Printf("[wepapered] state save error seeding wallpaper props: %v", err)
+			}
+		}
+	}
 	return s
 }
 
