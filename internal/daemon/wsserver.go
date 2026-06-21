@@ -125,6 +125,7 @@ func (s *WSServer) Serve(ln net.Listener) {
 	mux.HandleFunc("/we", s.handle)
 	mux.HandleFunc("/reload", s.handleReload)
 	mux.HandleFunc("/inspect", s.handleInspect)
+	mux.HandleFunc("/debug", s.handleDebug)
 	mux.HandleFunc("/inspector", s.serveInspector)
 	mux.HandleFunc("/ui/", s.serveUI)
 	localeHandler := func(w http.ResponseWriter, r *http.Request) {
@@ -268,6 +269,36 @@ func (s *WSServer) handleInspect(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// handleDebug proxies an inspector debug command (isolate/hide/show/reset/set) to a
+// screen's LWE subprocess. Body: {"output":"DP-1","cmd":"isolate","id":3479,...}.
+// The cmd/id/prop/value fields are forwarded verbatim to LWE; "output" is stripped.
+func (s *WSServer) handleDebug(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "POST required", http.StatusMethodNotAllowed)
+		return
+	}
+	var body map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	output, _ := body["output"].(string)
+	delete(body, "output")
+	sock, ok := s.renderer.inspectableScreens()[output]
+	if !ok {
+		http.Error(w, "unknown or non-inspectable output: "+output, http.StatusNotFound)
+		return
+	}
+	ack, err := sendCtrlDebug(sock, body)
+	if err != nil {
+		log.Printf("[wepapered] debug %s: %v", output, err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(ack)
 }
 
 func (s *WSServer) handleReload(w http.ResponseWriter, r *http.Request) {

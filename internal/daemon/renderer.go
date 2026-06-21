@@ -173,6 +173,26 @@ func sendCtrlInspect(sockPath string) ([]byte, error) {
 	return io.ReadAll(conn)
 }
 
+// sendCtrlDebug sends a debug-inspector command (isolate/hide/show/reset/set) to
+// an LWE subprocess and returns its JSON ack. Unlike a load, these apply live with
+// no reload, so the reply comes back immediately.
+func sendCtrlDebug(sockPath string, payload map[string]interface{}) ([]byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialTimeout("unix", sockPath, 3*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", sockPath, err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(append(data, '\n')); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(conn)
+}
+
 // inspectableScreens returns a snapshot of the live screens that own a control
 // socket, keyed by Wayland output name. Used by the debug inspector to discover
 // which monitors can be introspected.
