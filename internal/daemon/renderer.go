@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -154,6 +155,37 @@ func sendCtrlLoadJSON(sockPath, bgDir, presetDir string, props map[string]string
 // sendCtrlLoad is the legacy plain-text protocol (kept for compatibility).
 func sendCtrlLoad(sockPath, bgDir string) error {
 	return sendCtrlLoadJSON(sockPath, bgDir, "", nil)
+}
+
+// sendCtrlInspect asks an LWE subprocess to serialize its live scene graph and
+// returns the raw JSON reply ("{}" when the wallpaper isn't a scene). The reply
+// can be large (one entry per scene object), so it's drained until EOF.
+func sendCtrlInspect(sockPath string) ([]byte, error) {
+	conn, err := net.DialTimeout("unix", sockPath, 3*time.Second)
+	if err != nil {
+		return nil, fmt.Errorf("dial %s: %w", sockPath, err)
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Write([]byte("inspect\n")); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(conn)
+}
+
+// inspectableScreens returns a snapshot of the live screens that own a control
+// socket, keyed by Wayland output name. Used by the debug inspector to discover
+// which monitors can be introspected.
+func (r *Renderer) inspectableScreens() map[string]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]string, len(r.screens))
+	for name, sp := range r.screens {
+		if sp.ctrlSock != "" {
+			out[name] = sp.ctrlSock
+		}
+	}
+	return out
 }
 
 // propsEqual reports whether two --set-property override maps are equal, so the

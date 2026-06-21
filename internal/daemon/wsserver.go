@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -123,6 +124,8 @@ func (s *WSServer) Serve(ln net.Listener) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/we", s.handle)
 	mux.HandleFunc("/reload", s.handleReload)
+	mux.HandleFunc("/inspect", s.handleInspect)
+	mux.HandleFunc("/inspector", s.serveInspector)
 	mux.HandleFunc("/ui/", s.serveUI)
 	localeHandler := func(w http.ResponseWriter, r *http.Request) {
 		reqPath := r.URL.Path[strings.LastIndex(r.URL.Path, "locale/")+len("locale/"):]
@@ -233,6 +236,40 @@ func (s *WSServer) handleControlConn(c net.Conn) {
 // changes (audio device, preferred player, now-playing text, theme, custom dirs, …)
 // take effect without restarting the daemon. Triggered by `wepaperedctl reload` and by
 // the settings window on save.
+// handleInspect powers the scene debug inspector. Without an ?output= param it
+// returns the list of introspectable monitors; with one it proxies an "inspect"
+// query to that screen's LWE subprocess and streams back the live scene graph JSON.
+func (s *WSServer) handleInspect(w http.ResponseWriter, r *http.Request) {
+	screens := s.renderer.inspectableScreens()
+
+	output := r.URL.Query().Get("output")
+	if output == "" {
+		// Discovery: return the sorted list of monitors that can be inspected.
+		names := make([]string, 0, len(screens))
+		for name := range screens {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"outputs": names})
+		return
+	}
+
+	sock, ok := screens[output]
+	if !ok {
+		http.Error(w, "unknown or non-inspectable output: "+output, http.StatusNotFound)
+		return
+	}
+	data, err := sendCtrlInspect(sock)
+	if err != nil {
+		log.Printf("[wepapered] inspect %s: %v", output, err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
+}
+
 func (s *WSServer) handleReload(w http.ResponseWriter, r *http.Request) {
 	if err := s.doReload(); err != nil {
 		log.Printf("[wepapered] reload: %v", err)
