@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -35,6 +36,7 @@ func (t *TrayManager) onReady() {
 	mConfig := systray.AddMenuItem("Configuration", "Open the WePapered configuration menu")
 	mReload := systray.AddMenuItem("Reload", "Reload config and restart the wallpapers")
 	mClearCache := systray.AddMenuItem("Clear Shaders Cache", "Delete cached shader binaries and restart wallpapers")
+	mInspector := systray.AddMenuItem("Scene Inspector", "Open the live scene debug inspector in your browser")
 	systray.AddSeparator()
 	mQuit := systray.AddMenuItem("Quit", "Quit WePapered and close wallpapers")
 
@@ -49,6 +51,8 @@ func (t *TrayManager) onReady() {
 				t.reload()
 			case <-mClearCache.ClickedCh:
 				t.clearCache()
+			case <-mInspector.ClickedCh:
+				t.openInspector()
 			case <-mQuit.ClickedCh:
 				systray.Quit()
 			}
@@ -85,6 +89,16 @@ func (t *TrayManager) openWEBrowser() {
 	}
 	// Fallback to a browser if the gui binary isn't shipped alongside.
 	exec.Command("xdg-open", core.GUIURL(t.cfg, t.port)).Start() //nolint
+}
+
+// openInspector opens the scene debug inspector (served by this daemon) in the
+// user's browser. It's a plain web page, so xdg-open is enough — no companion
+// binary needed.
+func (t *TrayManager) openInspector() {
+	url := fmt.Sprintf("http://127.0.0.1:%d/inspector", t.port)
+	if err := exec.Command("xdg-open", url).Start(); err != nil {
+		log.Printf("[wepapered] failed to open inspector: %v", err)
+	}
 }
 
 // openConfigUI launches the wepapered-settings GTK window.
