@@ -82,6 +82,7 @@ type screenProc struct {
 	typ         string            // wallpaper type ("scene", "web", "video", …)
 	ctrlSock    string        // unix socket path for IPC hot-swap / stop
 	readyCh     chan struct{} // closed when LWE signals READY on the ready pipe
+	readPipe    *os.File      // read end of the ready/liveness pipe; closing it makes LWE self-exit
 	hotswapping bool          // IPC hot-swap in progress (protected by Renderer.mu)
 }
 
@@ -839,10 +840,12 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 		readW.Close()
 	}
 
-	// Watch ready pipe: close readyCh when LWE writes READY or exits.
+	// Watch ready pipe: close readyCh when LWE writes READY or exits. Keep readR open
+	// afterwards — the subprocess uses this same pipe for parent-death detection (it
+	// self-exits when the read end closes), so the daemon holds it for the whole
+	// subprocess lifetime and only closes it on reap (below).
 	if readR != nil {
 		go func() {
-			defer readR.Close()
 			defer close(readyCh)
 			buf := make([]byte, 32)
 			readR.Read(buf) //nolint — any read (or EOF on LWE exit) is sufficient
@@ -861,11 +864,17 @@ func (r *Renderer) launchScreenLocked(outputName, bgDir, presetDir string, props
 		props:     props,
 		ctrlSock:  ctrlSockPath,
 		readyCh:   readyCh,
+		readPipe:  readR,
 	}
 	// typ is set by Apply() after creation
 	startTime := time.Now()
 	go func() {
 		defer close(doneCh)
+		// Close the ready/liveness pipe once the subprocess is gone: it has already
+		// exited, so there's nothing left to self-exit, and we must not leak the fd.
+		if readR != nil {
+			defer readR.Close()
+		}
 		if err := cmd.Wait(); err != nil {
 			log.Printf("[renderer] lwe %s (pid=%d) exited: %v", outputName, cmd.Process.Pid, err)
 		} else {
