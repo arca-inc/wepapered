@@ -222,6 +222,36 @@ func propsEqual(a, b map[string]string) bool {
 	return true
 }
 
+// setPropWork is a queued live property update for one running screen: push the
+// changed properties over its ctrl socket (no reload). See Apply.
+type setPropWork struct {
+	ctrlSock string
+	output   string
+	props    map[string]string
+}
+
+// changedProps returns the entries of next whose value differs from cur (added or
+// changed keys). Removed keys are ignored — there is no "unset a property" command,
+// and a property reverting to default still arrives here as an explicit value.
+func changedProps(cur, next map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range next {
+		if cur[k] != v {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// sendCtrlSetProperty pushes one user property (name=value) to a running LWE over
+// its ctrl socket so it applies live, without reloading the wallpaper.
+func sendCtrlSetProperty(sockPath, name, value string) error {
+	_, err := sendCtrlDebug(sockPath, map[string]interface{}{
+		"cmd": "setproperty", "name": name, "value": value,
+	})
+	return err
+}
+
 func sendCtrlStop(sockPath string) {
 	conn, err := net.DialTimeout("unix", sockPath, 2*time.Second)
 	if err != nil {
@@ -498,6 +528,7 @@ func (r *Renderer) applyLocked(state *DaemonState) {
 	}
 	var toStop []*screenProc
 	var toHotswap []hwWork
+	var toSetProps []setPropWork
 
 	for outName, sp := range r.screens {
 		w, keep := desired[outName]
@@ -507,6 +538,14 @@ func (r *Renderer) applyLocked(state *DaemonState) {
 			if sp.cmd.Process != nil {
 				sp.cmd.Process.Signal(syscall.SIGTERM)
 			}
+		} else if w.bgDir == sp.bgDir && w.presetDir == sp.presetDir && !propsEqual(w.props, sp.props) && sp.ctrlSock != "" && !sp.hotswapping {
+			// Same wallpaper, only its properties changed (e.g. a colour/toggle the user
+			// tweaked in WE's UI): push just the changed properties over the ctrl socket so
+			// LWE applies them live. No process restart, no `load`, no loading overlay —
+			// that "reload" on every property change is exactly what this avoids.
+			changed := changedProps(sp.props, w.props)
+			toSetProps = append(toSetProps, setPropWork{sp.ctrlSock, outName, changed})
+			sp.props = w.props
 		} else if w.bgDir != sp.bgDir || w.presetDir != sp.presetDir || !propsEqual(w.props, sp.props) {
 			if sp.ctrlSock != "" && !sp.hotswapping {
 				toHotswap = append(toHotswap, hwWork{sp, w.bgDir, w.presetDir, w.props, w.previewPath, outName, w.typ})
@@ -521,6 +560,20 @@ func (r *Renderer) applyLocked(state *DaemonState) {
 			}
 			// if sp.hotswapping: already in flight, skip — next Apply() will catch up
 		}
+	}
+
+	// Live property updates: fire-and-forget over the ctrl socket. These don't touch the
+	// start/stop/hotswap machinery (no reload, no overlay), so dispatch them now and let
+	// the rest of Apply early-return if there's nothing else to do.
+	for _, sw := range toSetProps {
+		sw := sw
+		go func() {
+			for k, v := range sw.props {
+				if err := sendCtrlSetProperty(sw.ctrlSock, k, v); err != nil {
+					log.Printf("[renderer] setproperty %s on %s failed: %v", k, sw.output, err)
+				}
+			}
+		}()
 	}
 
 	// New screens: desired but not currently running
