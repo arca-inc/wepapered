@@ -97,7 +97,7 @@ const inspectorHTML = `<!doctype html>
   <h1>🔍 Inspecteur de scène</h1>
   <select id="output" title="Moniteur"></select>
   <button id="refresh">↻ Rafraîchir</button>
-  <label class="chk"><input type="checkbox" id="auto"> auto (1s)</label>
+  <label class="chk"><input type="checkbox" id="auto" checked> auto (1s)</label>
   <button id="reset" class="warn" title="Réafficher tout + annuler isolation">⟲ Reset debug</button>
   <div class="sp"></div>
   <span id="stat" class="id"></span>
@@ -232,7 +232,7 @@ function rowFor(o, depth) {
   });
   div.appendChild(tw); div.appendChild(badge); div.appendChild(name); div.appendChild(id);
   div.appendChild(eye); div.appendChild(iso);
-  div.onclick = function(){ state.sel = o.id; renderTree(); renderProps(o); };
+  div.onclick = function(){ state.sel = o.id; dbg('highlight', { id: o.id }); renderTree(); renderProps(o); };
   return div;
 }
 
@@ -246,10 +246,11 @@ function escapeHtml(s) {
   });
 }
 
-// Build a number input that sends a "set" command on change.
-function numInput(val, onChange) {
+// Build a number input that sends a "set" command on change. step controls the
+// arrow/scroll increment (decimals nudge by 0.01, positions by 1).
+function numInput(val, step, onChange) {
   var i = document.createElement('input');
-  i.type = 'number'; i.step = 'any'; i.value = (val == null ? 0 : +val);
+  i.type = 'number'; i.step = (step == null ? 'any' : step); i.value = (val == null ? 0 : +val);
   i.onchange = function(){ onChange(parseFloat(i.value) || 0); };
   return i;
 }
@@ -268,12 +269,12 @@ function renderProps(o) {
     if (typeof vNode === 'string') tv.innerHTML = vNode; else tv.appendChild(vNode);
     tr.appendChild(tk); tr.appendChild(tv); tbl.appendChild(tr);
   }
-  function vecEditor(prop, vec, n) {
+  function vecEditor(prop, vec, n, step) {
     var wrap = document.createElement('span');
     var arr = (vec || []).slice(0, n);
     while (arr.length < n) arr.push(0);
     arr.forEach(function(comp, idx){
-      var inp = numInput(comp, function(nv){
+      var inp = numInput(comp, step, function(nv){
         arr[idx] = nv; dbg('set', { id: o.id, prop: prop, value: arr });
       });
       inp.style.marginRight = '4px';
@@ -297,11 +298,13 @@ function renderProps(o) {
     rowKV('visible', cb);
   }
   if ('alpha' in o) {
-    rowKV('alpha', numInput(o.alpha, function(nv){ dbg('set', { id: o.id, prop: 'alpha', value: nv }); }));
+    rowKV('alpha', numInput(o.alpha, 0.01, function(nv){ dbg('set', { id: o.id, prop: 'alpha', value: nv }); }));
   }
-  rowKV('origin', vecEditor('origin', o.origin, 3));
-  if ('scale' in o) rowKV('scale', vecEditor('scale', o.scale, 3));
-  if ('angle' in o) rowKV('angle (z)°', numInput(o.angle, function(nv){ dbg('set', { id: o.id, prop: 'angle', value: nv }); }));
+  rowKV('origin', vecEditor('origin', o.origin, 3, 1));
+  if ('scale' in o) rowKV('scale', vecEditor('scale', o.scale, 3, 0.01));
+  // angles is a full x/y/z rotation vector (radians). LWE applies all three.
+  if ('angles' in o) rowKV('angles (x,y,z rad)', vecEditor('angles', o.angles, 3, 0.01));
+  else if ('angle' in o) rowKV('angle (z)°', numInput(o.angle, 0.01, function(nv){ dbg('set', { id: o.id, prop: 'angle', value: nv }); }));
 
   // ── Lecture seule ──
   if ('size' in o) rowKV('size', fmtVec(o.size));
@@ -313,19 +316,27 @@ function renderProps(o) {
   }
 }
 
-$('#refresh').onclick = fetchScene;
-$('#output').onchange = function(){ state.sel = null; state.hidden = {}; state.isolated = null; fetchScene(); };
-$('#auto').onchange = function(e){
+function startAuto() {
   if (state.autoTimer) { clearInterval(state.autoTimer); state.autoTimer = null; }
-  if (e.target.checked) state.autoTimer = setInterval(fetchScene, 1000);
+  if ($('#auto').checked) state.autoTimer = setInterval(fetchScene, 1000);
+}
+
+$('#refresh').onclick = fetchScene;
+$('#output').onchange = function(){
+  state.sel = null; state.hidden = {}; state.isolated = null;
+  dbg('highlight', {}); // clear highlight on the previous output
+  fetchScene();
 };
+$('#auto').onchange = startAuto;
 $('#reset').onclick = function(){
   state.hidden = {}; state.isolated = null;
+  // 'reset' also clears the highlight on the LWE side.
   dbg('reset', {}).then(function(){ renderTree(); });
 };
 
 log('inspecteur prêt');
-loadOutputs().then(function(outs){ if (outs.length) fetchScene(); });
+// Auto-refresh is on by default (checkbox starts checked).
+loadOutputs().then(function(outs){ if (outs.length) fetchScene(); startAuto(); });
 </script>
 </body>
 </html>`
